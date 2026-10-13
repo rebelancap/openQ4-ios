@@ -1,6 +1,6 @@
 --- a/src/renderer/RendererGLModule.cpp
 +++ b/src/renderer/RendererGLModule.cpp
-@@ -59,6 +59,7 @@
+@@ -60,6 +60,7 @@
  module they are module-local variables bound from renderImport_t.
  ====================
  */
@@ -8,7 +8,7 @@
  idSys *						sys = NULL;
  idCommon *					common = NULL;
  idCVarSystem *				cvarSystem = NULL;
-@@ -72,14 +73,21 @@
+@@ -73,14 +74,21 @@
  idEventLoop *				eventLoop = NULL;
  rvBSEManager *				bse = NULL;
  idConsole *					console = NULL;
@@ -30,7 +30,7 @@
  idCVar com_developer( "developer", "0", CVAR_BOOL|CVAR_SYSTEM|CVAR_NOCHEAT, "developer mode" );
  idCVar com_purgeAll( "com_purgeAll", "0", CVAR_BOOL | CVAR_ARCHIVE | CVAR_SYSTEM, "purge everything between level loads" );
  idCVar com_makingBuild( "com_makingBuild", "0", CVAR_BOOL | CVAR_SYSTEM, "1 when making a build" );
-@@ -92,6 +100,7 @@
+@@ -93,6 +101,7 @@
  idCVar r_windowWidth( "r_windowWidth", "1280", CVAR_RENDERER | CVAR_ARCHIVE | CVAR_INTEGER, "windowed mode width" );
  idCVar r_windowHeight( "r_windowHeight", "720", CVAR_RENDERER | CVAR_ARCHIVE | CVAR_INTEGER, "windowed mode height" );
  idCVar r_skipGuiShaders( "r_skipGuiShaders", "0", CVAR_RENDERER | CVAR_INTEGER, "1 = skip all gui elements on surfaces, 2 = skip drawing but still handle events, 3 = draw but skip events", 0, 3, idCmdSystem::ArgCompletion_Integer<0,3> );
@@ -38,7 +38,7 @@
  
  static const renderModuleServices_t *rgm_services = NULL;
  static const renderWindowServices_t *rgm_windowServices = NULL;
-@@ -100,7 +109,9 @@
+@@ -101,7 +110,9 @@
  // the engine-owned window state is mirrored through the import; the module's
  // engineWindowState instance satisfies the renderer sources' references and
  // is refreshed from the services on demand
@@ -48,7 +48,7 @@
  
  /*
  ====================
-@@ -110,9 +121,11 @@
+@@ -111,9 +122,11 @@
  platform backend.
  ====================
  */
@@ -60,7 +60,7 @@
  
  /*
  ====================
-@@ -122,26 +135,37 @@
+@@ -123,26 +136,37 @@
  definitions route them over the services table.
  ====================
  */
@@ -98,7 +98,7 @@
  bool Sys_GetDesktopResolution( int *width, int *height ) {
  	if ( rgm_windowServices == NULL || rgm_windowServices->GetDesktopResolution == NULL ) {
  		return false;
-@@ -149,12 +173,15 @@
+@@ -150,12 +174,15 @@
  	rgm_windowServices->GetDesktopResolution( width, height );
  	return true;
  }
@@ -114,7 +114,7 @@
  
  #if defined( MACOS_X )
  /*
-@@ -176,6 +203,7 @@
+@@ -177,6 +204,7 @@
  itself fails.
  ====================
  */
@@ -122,7 +122,7 @@
  const char *Sys_EXEPath( void ) {
  	static char exePath[ PATH_MAX ];
  
-@@ -188,24 +216,31 @@
+@@ -189,24 +217,31 @@
  	return exePath;
  }
  #endif
@@ -154,7 +154,7 @@
  
  /*
  ====================
-@@ -217,8 +252,12 @@
+@@ -218,8 +253,12 @@
  appear in the engine's Sys_ListThreads output.
  ====================
  */
@@ -167,7 +167,7 @@
  
  static void RGM_RemoveThreadInfo( xthreadInfo &info ) {
  	Sys_EnterCriticalSection( CRITICAL_SECTION_ZERO );
-@@ -237,9 +276,11 @@
+@@ -238,9 +277,11 @@
  	Sys_LeaveCriticalSection( CRITICAL_SECTION_ZERO );
  }
  
@@ -179,7 +179,7 @@
  
  bool Sys_IsThreadStopRequested( const xthreadInfo &info ) {
  	return info.stopRequested;
-@@ -247,6 +288,7 @@
+@@ -248,6 +289,7 @@
  
  #if defined( _WIN32 )
  
@@ -187,7 +187,7 @@
  void Sys_CreateThread( xthread_t function, void *parms, xthreadPriority priority, xthreadInfo &info, const char *name, xthreadInfo *threads[MAX_THREADS], int *thread_count ) {
  	DWORD threadId = 0;
  	HANDLE temp = CreateThread( NULL, 0, ( LPTHREAD_START_ROUTINE )function, parms, 0, &threadId );
-@@ -271,7 +313,9 @@
+@@ -272,7 +314,9 @@
  		common->DPrintf( "WARNING: MAX_THREADS reached\n" );
  	}
  }
@@ -197,7 +197,7 @@
  bool Sys_IsCurrentThreadStopRequested( void ) {
  	const DWORD id = GetCurrentThreadId();
  	bool stopRequested = false;
-@@ -285,7 +329,9 @@
+@@ -286,7 +330,9 @@
  	Sys_LeaveCriticalSection( CRITICAL_SECTION_ZERO );
  	return stopRequested;
  }
@@ -207,7 +207,7 @@
  void Sys_DestroyThread( xthreadInfo &info ) {
  	Sys_RequestThreadStop( info );
  	WaitForSingleObject( reinterpret_cast<HANDLE>( info.threadHandle ), INFINITE );
-@@ -295,6 +341,7 @@
+@@ -296,6 +342,7 @@
  	info.stopRequested = false;
  	RGM_RemoveThreadInfo( info );
  }
@@ -215,7 +215,7 @@
  
  #else
  
-@@ -316,6 +363,7 @@
+@@ -317,6 +364,7 @@
  	return thread;
  }
  
@@ -223,7 +223,7 @@
  void Sys_CreateThread( xthread_t function, void *parms, xthreadPriority priority, xthreadInfo &info, const char *name, xthreadInfo *threads[MAX_THREADS], int *thread_count ) {
  	( void )priority;
  	info.threadHandle = 0;
-@@ -348,7 +396,9 @@
+@@ -349,7 +397,9 @@
  	}
  	Sys_LeaveCriticalSection( CRITICAL_SECTION_ZERO );
  }
@@ -233,7 +233,7 @@
  bool Sys_IsCurrentThreadStopRequested( void ) {
  	const pthread_t thread = pthread_self();
  	bool stopRequested = false;
-@@ -362,7 +412,9 @@
+@@ -363,7 +413,9 @@
  	Sys_LeaveCriticalSection( CRITICAL_SECTION_ZERO );
  	return stopRequested;
  }
@@ -243,7 +243,7 @@
  void Sys_DestroyThread( xthreadInfo &info ) {
  	if ( info.threadHandle == 0 ) {
  		return;
-@@ -374,6 +426,7 @@
+@@ -375,6 +427,7 @@
  	info.stopRequested = false;
  	RGM_RemoveThreadInfo( info );
  }
@@ -251,7 +251,7 @@
  
  #endif
  
-@@ -385,18 +438,24 @@
+@@ -386,19 +439,29 @@
  these entry points are inert so the shared renderer sources link unchanged.
  ====================
  */
@@ -274,9 +274,22 @@
  }
 +#endif
  
- #ifdef OPENQ4_RENDERER_GL_MODULE
++#ifndef OPENQ4_RENDERER_MODULE_STATIC
++// Statically linked (iOS), the engine-side definitions in RendererModule.cpp
++// ARE these entry points — the module-side forwarders below exist only to
++// reach them across a dlopen boundary, and would be duplicate symbols here.
+ bool R_RendererModule_ResetApiAfterDeviceFailure( void ) {
+ 	// the loader owns the archived r_renderApi selection
+ 	if ( rgm_services != NULL && rgm_services->ResetRenderApiAfterDeviceFailure != NULL ) {
+@@ -433,6 +496,7 @@
+ 		rgm_services->RendererDeviceEvent( event );
+ 	}
+ }
++#endif /* !OPENQ4_RENDERER_MODULE_STATIC */
+ 
+ #if defined( OPENQ4_RENDERER_GL_MODULE ) || defined( OPENQ4_RENDERER_GLES_MODULE )
  /*
-@@ -458,8 +517,22 @@
+@@ -495,8 +559,22 @@
  #ifdef OPENQ4_RENDERER_VK_MODULE
  	VK_Bringup_Shutdown();
  #endif
@@ -299,7 +312,7 @@
  }
  
  #if defined( _WIN32 )
-@@ -507,16 +580,27 @@
+@@ -544,16 +622,27 @@
  	idLib::cvarSystem = cvarSystem;
  	idLib::fileSystem = fileSystem;
  

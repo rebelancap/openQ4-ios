@@ -5,7 +5,7 @@
 # at the commits in UPSTREAM.pin:
 #
 #   python3 vendor/openQ4/tools/build/generate_savegame_compat_header.py \
-#       --project-root vendor/openQ4 --game-stage-root vendor/openQ4-game \
+#       --project-root vendor/openQ4 --game-stage-root vendor/openQ4 \
 #       --header-out /dev/stdout
 #
 # scripts/gen-savegame-compat-header.sh recomputes it on every build and fails
@@ -21,10 +21,17 @@
 # refused outright by upstream's design ("no v2 snapshot has a verified
 # decoder"), independently of this value.
 #
+# v0.14.000 (D-116): new saves carry payload v4; v3 payloads (every save made
+# by openQ4-ios 1.0.0) still load — the engine and both game modules accept
+# versions 3 and 4, the stamp stays advisory, and the build floor is still 661.
+# The game sources are in-tree now, so --game-stage-root is vendor/openQ4 too
+# (exactly what upstream's meson passes), which is why the file count moved.
+#
 # UPDATE THIS FILE ONLY WHEN UPSTREAM.pin MOVES. Never update it to silence a
 # build failure: a dirty vendor tree or a changed generator is a bug to find.
 #
-# Pin at the time of recording: engine fcdd5696 (v0.13.2), game 8f411dbc (404 files).
-# Previous: f77698bc04082fd9ab0a38102ef17267ca6f5e6e02d54712e62c73f0593cbffe (227ee810 + 61a3c10d).
+# Pin at the time of recording: 1621aa21 (v0.14.000, game in-tree) (433 files).
+# Previous: fdd2c6015e12533ae5a49a1c7bcda21f7b9129f2739fcd3a7563dac828115eb4 (fcdd5696 + 8f411dbc, 404 files).
+# Before: f77698bc04082fd9ab0a38102ef17267ca6f5e6e02d54712e62c73f0593cbffe (227ee810 + 61a3c10d).
 
-fdd2c6015e12533ae5a49a1c7bcda21f7b9129f2739fcd3a7563dac828115eb4
+14c8358dc8210c421870e5a7e25cf16fc11a9f3376355a9f77fa2cd4c07154de

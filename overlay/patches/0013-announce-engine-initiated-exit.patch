@@ -1,6 +1,6 @@
 --- a/src/sys/posix/posix_main.cpp
 +++ b/src/sys/posix/posix_main.cpp
-@@ -150,7 +150,21 @@
+@@ -150,8 +150,21 @@
  Posix_Exit
  ================
  */
@@ -13,19 +13,21 @@
 +#endif
 +
  void Posix_Exit(int ret) {
+-#if defined( __ANDROID__ )
 +#if defined( __APPLE__ ) && TARGET_OS_IPHONE
 +	// The last thing the process does on a deliberate exit. Without this, an
 +	// engine-initiated quit and an OS kill look identical from the logs: both
 +	// simply stop.
 +	OpenQ4_iOS_BlackBox( "*** Posix_Exit(%d) — engine-initiated shutdown ***", ret );
-+#endif
- 	if ( !Posix_IsMainThread() ) {
- 		// A worker-thread fatal error exits through here. Joining the async
- 		// thread from itself would recurse through common->Error until the
-@@ -1472,6 +1486,25 @@
++#elif defined( __ANDROID__ )
+ 	// nothing below is guaranteed to print again, so do not let an
+ 	// unterminated line leave with the process
+ 	Sys_AndroidLogFlush();
+@@ -1595,6 +1608,25 @@
+ */
  void Sys_GenerateEvents( void ) {
  	char *s;
- 
++
 +#if defined( __APPLE__ ) && TARGET_OS_IPHONE
 +	/*
 +	 * Service the shell's cross-thread queues here rather than only in the
@@ -44,7 +46,6 @@
 +	 */
 +	OpenQ4_iOS_ServiceShellQueues();
 +#endif
-+
+ 
  #if defined( USE_SDL3 )
  	(void)Sys_SDL_PumpEvents();
- 	IN_Frame();

@@ -70,8 +70,8 @@ SAVE_FLOOR="$(sed -n 's/^static const int SESSION_OPENQ4_SAVEGAME_MINIMUM_SUPPOR
 	"$VENDOR/src/framework/Session.cpp" | head -1)"
 [ -n "$SAVE_FLOOR" ] || { echo "FATAL: no SESSION_OPENQ4_SAVEGAME_MINIMUM_SUPPORTED_BUILD in vendor/openQ4 Session.cpp — re-check D-110's build-number rule" >&2; exit 1; }
 RETAIL_BUILD="$(sed -n 's/^const int INITIAL_RELEASE_BUILD_NUMBER = \([0-9][0-9]*\);.*/\1/p' \
-	"$ROOT/vendor/openQ4-game/src/game/gamesys/SaveGame.h" | head -1)"
-[ -n "$RETAIL_BUILD" ] || { echo "FATAL: no INITIAL_RELEASE_BUILD_NUMBER in vendor/openQ4-game SaveGame.h" >&2; exit 1; }
+	"$VENDOR/src/game/gamesys/SaveGame.h" | head -1)"
+[ -n "$RETAIL_BUILD" ] || { echo "FATAL: no INITIAL_RELEASE_BUILD_NUMBER in vendor/openQ4/src/game SaveGame.h" >&2; exit 1; }
 [ "$RESOURCE_BUILD" -ge "$SAVE_FLOOR" ] && [ "$RESOURCE_BUILD" -ne "$RETAIL_BUILD" ] || {
 	echo "FATAL: pin-derived build number $RESOURCE_BUILD is below upstream's savegame floor $SAVE_FLOOR" >&2
 	echo "       (or equals the retail build $RETAIL_BUILD): this build would refuse its own saves." >&2

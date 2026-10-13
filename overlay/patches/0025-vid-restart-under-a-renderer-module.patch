@@ -1,6 +1,6 @@
 --- a/src/renderer/RenderSystem_init.cpp
 +++ b/src/renderer/RenderSystem_init.cpp
-@@ -4616,6 +4616,42 @@
+@@ -5754,6 +5754,42 @@
  		if ( idStr::Icmp( args.Argv( i ), "windowed" ) == 0 ) {
  			forceWindow = true;
  			continue;
@@ -43,7 +43,7 @@
  		}
  	}
  
-@@ -4653,8 +4689,16 @@
+@@ -5791,8 +5827,16 @@
  		parms.multiSamples = r_multiSamples.GetInteger();
  		parms.stereo = false;
  		if ( !GLimp_SetScreenParms( parms ) ) {

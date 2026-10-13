@@ -1,8 +1,8 @@
 --- a/src/renderer/tr_main.cpp
 +++ b/src/renderer/tr_main.cpp
-@@ -821,7 +821,83 @@
- float tr_levelshotProjectionShiftX = 0.0f;
- float tr_levelshotProjectionShiftY = 0.0f;
+@@ -942,7 +942,83 @@
+ 
+ static void R_GetViewFrustumExtents( float &zNear, float &xmin, float &xmax, float &ymin, float &ymax );
  
 +#if defined( OPENQ4_VISIONOS_3D )
  /*
@@ -84,7 +84,7 @@
  =================
  R_SetViewMatrix
  
-@@ -876,6 +952,17 @@
+@@ -997,6 +1073,17 @@
  	// convert from our coordinate system (looking down X)
  	// to OpenGL's coordinate system (looking down -Z)
  	myGlMultMatrix( viewerMatrix, s_flipMatrix, world->modelViewMatrix );
@@ -102,7 +102,7 @@
  }
  
  /*
-@@ -966,6 +1053,24 @@
+@@ -1069,6 +1156,24 @@
  	tr.viewDef->projectionMatrix[11] = -1;
  	tr.viewDef->projectionMatrix[15] = 0;
  

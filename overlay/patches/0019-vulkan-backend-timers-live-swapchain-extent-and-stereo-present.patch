@@ -1,6 +1,6 @@
 --- a/src/renderer/Vulkan/vk_GuiExecutor.cpp
 +++ b/src/renderer/Vulkan/vk_GuiExecutor.cpp
-@@ -25,487 +25,2675 @@
+@@ -25,619 +25,2804 @@
  #ifdef OPENQ4_RENDERER_VK_MODULE
  
  #include "../../idlib/precompiled.h"
@@ -9,6 +9,7 @@
 -#include "../tr_local.h"
 -#include "../Model_local.h"
 -#include "../RenderModuleAPI.h"
+-#include "../HDRExposureCore.h"
 -
 -#undef snprintf
 -#undef vsnprintf
@@ -21,12 +22,14 @@
 -#ifndef UINT_MAX
 -#define UINT_MAX	0xffffffffu
 -#endif
+-#include <chrono>
 -#include <cstdio>
 -#include <cstring>
 -#include "volk.h"
 -#include "vk_mem_alloc.h"
 -
 -#include "VulkanDevice.h"
+-#include "vk_PBRProbes.h"
 -#include "VulkanGpuFrameTiming.h"
 -#include "../ClassicGuiDomain.h"
 -#include "../ClassicCinematicPostDomain.h"
@@ -40,11 +43,18 @@
 -#include "../RendererMetrics.h"
 -#include "../ScenePackets.h"
 -#include "vk_Image.h"
+-#include "vk_ProbeSource.h"
 -// vk_ShadowMap.h: VK_ShadowMap_Shutdown + the point cube pool size the
 -// descriptor pool budgets for (Phase F2a/F2b)
 -#include "vk_ShadowMap.h"
+-#include "vk_ExecutorHooks.h"
+-#include "vk_HDRScene.h"
+-#include "vk_MaterialPrograms.h"
 -#include "shaders/gui_shaders_spv.h"
 -#include "shaders/temporal_resolve_spv.h"
+-#include "shaders/target_test_spv.h"
+-#include "shaders/color_resolve_spv.h"
+-#include "shaders/display_color_mapping_spv.h"
 -
 -extern idCVar r_skipDynamicTextures;
 -
@@ -64,6 +74,21 @@
 -bool VK_Exec_BeginMainRendering( bool clearColorDepth );
 -void VK_Exec_EndMainRendering( void );
 -bool VK_GuiExecutor_EndFrameAndPresent( void );
+-void VK_PostProcess_Shutdown( void );
+-int VK_PostProcess_WorldDepthCaptures( const viewDef_t *viewDef );
+-int VK_PostProcess_DepthFillPhase( const drawSurf_t *surf, int captures );
+-void VK_PostProcess_CaptureWorldDepth( const viewDef_t *viewDef, int fillPhase, int captures,
+-		const int phaseDrawn[ 4 ] );
+-bool VK_PostProcess_PrepareSSAOField( const viewDef_t *viewDef );
+-bool VK_PostProcess_DrawSceneEffects( const viewDef_t *viewDef );
+-bool VK_SceneEffects_DrawPreFog( const viewDef_t *viewDef, int processed );
+-bool VK_PostProcess_DrawUnderwater( const viewDef_t *viewDef );
+-void VK_DebugTools_DrawView( const viewDef_t *viewDef );
+-static void VK_Exec_ReleaseStencilReadbacks( void );
+-static void VK_Exec_PrintStencilReadbacks( int slot );
+-static void VK_Exec_ReleaseHDRReadbacks( void );
+-static void VK_Exec_ConsumeHDRReadback( int slot );
+-static void VK_Exec_DiscardHDRReadback( int slot );
 -static bool VK_GuiExecutor_SubmitFrame( bool present );
 -VkDescriptorSet VK_Exec_InteractionUniformSet( void );
 -int VK_Exec_InteractionUniformAlloc( const void *data, int bytes );
@@ -84,9 +109,11 @@
 -Executor state
 -====================
 -*/
--// world views stream all visible geometry through the rings each frame
--// (the vertex cache is CPU-backed); sized for q4dm2-scale 3D views
--static const int VK_VERTEX_RING_BYTES = 32 * 1024 * 1024;
+-// World geometry and output-resolution vector UI share this frame-local ring.
+-// A locked 4K optic uses about 43 MiB after coverage/paint consolidation. World
+-// geometry, stencil volumes and composition passes need their own headroom;
+-// keep them together instead of dropping late HUD/mask or shadow submissions.
+-static const int VK_VERTEX_RING_BYTES = 96 * 1024 * 1024;
 -static const int VK_INDEX_RING_BYTES = 8 * 1024 * 1024;
 -static const int VK_GPU_SKINNING_WORKGROUP_SIZE = 64;
 -static const int VK_GPU_SKINNING_MEMO_SIZE = 2048; // power of two
@@ -96,16 +123,20 @@
 -static const int VK_MAX_ENV_PIPELINES = 32;
 -static const int VK_MAX_PROGRAM_PIPELINES = 128;
 -static const int VK_MAX_BLEND_LIGHT_PIPELINES = 32;
--static const int VK_MAX_SPECIAL_PIPELINES = 64;
+-static const int VK_MAX_SPECIAL_PIPELINES = 96;
 -static const int VK_MAX_TEMPORAL_RESOLVE_PIPELINES = 8;
--static const int VK_MAX_DESCRIPTOR_SETS = 4096;
+-static const int VK_MAX_POST_PIPELINES = 128;
+-static const int VK_MAX_DESCRIPTOR_SETS = VK_MAX_IMAGES;
 -// rvspecial_depth.fs linearizes the Raven controller's depth texture with
 -// this historical near-plane convention.  The Vulkan path samples raw depth,
 -// so it must use the same value after translating normalized focus/range.
 -static const float VK_RVSPECIAL_DEPTH_ZNEAR = 0.25f;
 -// Descriptor sets displaced by a generation change during command recording
--// cannot be rewritten until the slot fence completes.
--static const int VK_MAX_RETIRED_SETS = 128;
+-// cannot be rewritten until the slot fence completes. A bulk image reload may
+-// replace every cached image in one frame, in addition to feedback resizes.
+-// Keep a full image-table generation plus the ordinary per-frame reserve;
+-// descriptor-pool and rollback storage use this same capacity below.
+-static const int VK_MAX_RETIRED_SETS = VK_MAX_IMAGES + 128;
 -// Per-draw blocks share one dynamic uniform ring. Ordinary interaction
 -// blocks retain their 256-byte range; the projected CSM block gets a
 -// shadow-only 512-byte range. Dynamic offsets use the device-reported
@@ -124,7 +155,10 @@
 -} vkRing_t;
 -
 -typedef struct vkPipelineTarget_s {
--	VkFormat			colorFormat;
+-	bool                hdrAccumulation;
+-	bool                lowerOrigin;
+-	uint32_t			colorCount;
+-	VkFormat			colorFormats[ VK_MAX_COLOR_ATTACHMENTS ];
 -	VkFormat			depthFormat;
 -	VkFormat			stencilFormat;
 -	VkSampleCountFlagBits samples;
@@ -133,9 +167,25 @@
 -typedef struct vkGuiPipeline_s {
 -	int				stateBits;		// GLS blend + per-channel write masks
 -	bool			separateColor;	// tightly-packed RGBA8 stream on binding 1
+-	bool			alphaToCoverage;	// multisampled targets only
 -	vkPipelineTarget_t target;
 -	VkPipeline		pipeline;
 -} vkGuiPipeline_t;
+-
+-// full-screen post passes and the extra geometry passes (vk_PostProcess.cpp,
+-// vk_SceneEffects.cpp, vk_DebugTools.cpp), keyed by pass kind, blend state,
+-// vertex layout, VK_EXTRA_PIPELINE_* flags and target
+-typedef struct vkPostPipeline_s {
+-	int				kind;
+-	int				stateBits;
+-	int				vertexLayout;
+-	int				flags;
+-	vkPipelineTarget_t target;
+-	VkPipeline		pipeline;
+-} vkPostPipeline_t;
+-
+-// VK_Exec_ExtraPipeline kinds used inside this file (vk_ExecutorHooks.h)
+-static const int VK_EXTRA_KIND_SOFT_PARTICLE = VK_EXTRA_KIND_EXECUTOR_BASE;
 -
 -typedef struct vkProgramPipeline_s {
 -	int				family;			// ARB family, or 0x100 + vkGLSLProgramFamily_t
@@ -154,9 +204,24 @@
 -
 -enum vkSpecialPipelineKind_t {
 -	VK_SPECIAL_INTERACTION,
+-	VK_SPECIAL_PROBE_ENVIRONMENT,
+-	VK_SPECIAL_PROBE_ENVIRONMENT_TRANSPARENT,
+-	VK_SPECIAL_BAKED_ENVIRONMENT,
+-	VK_SPECIAL_BAKED_PROBE_ENVIRONMENT,
 -	VK_SPECIAL_SHADOW_INTERACTION,
 -	VK_SPECIAL_POINT_SHADOW_INTERACTION,
+-	// Native ordered PBR transparency replays admitted interaction draws in
+-	// the material walk's sort position: the first composites through the
+-	// authored source alpha, the rest add through the same alpha.
+-	VK_SPECIAL_PBR_TRANSPARENT_COMPOSITE,
+-	VK_SPECIAL_PBR_TRANSPARENT_ADD,
+-	VK_SPECIAL_SHADOW_PBR_TRANSPARENT_COMPOSITE,
+-	VK_SPECIAL_SHADOW_PBR_TRANSPARENT_ADD,
+-	VK_SPECIAL_POINT_SHADOW_PBR_TRANSPARENT_COMPOSITE,
+-	VK_SPECIAL_POINT_SHADOW_PBR_TRANSPARENT_ADD,
 -	VK_SPECIAL_STENCIL_SHADOW,
+-	VK_SPECIAL_STENCIL_SHADOW_DEBUG_LINE,
+-	VK_SPECIAL_STENCIL_SHADOW_DEBUG_FILL,
 -	VK_SPECIAL_FOG,
 -	VK_SPECIAL_SHADOW_OVERLAY_PANEL,
 -	VK_SPECIAL_SHADOW_OVERLAY_POINT_PANEL,
@@ -194,6 +259,15 @@
 -	float			modelRow1[ 4 ];
 -	float			modelRow2[ 4 ];
 -} vkBumpyEnvironmentBlock_t;
+-
+-// std140 layout of SoftParticleBlock in soft_particle.frag
+-typedef struct vkSoftParticleBlock_s {
+-	float			depthInfo[ 4 ];		// P[10], P[14], fade distance, additive blend
+-	float			viewInfo[ 4 ];		// viewport origin (OpenGL window space), 1 / depth texture size
+-	float			framebuffer[ 4 ];	// x: framebuffer height
+-} vkSoftParticleBlock_t;
+-
+-bool VK_SoftParticleStageSupported( const drawSurf_t *surf, const shaderStage_t *pStage );
 -
 -// std140-compatible block consumed by temporal_resolve.frag. Keep this under
 -// the established 256-byte dynamic-uniform slice so the temporal pass can
@@ -276,6 +350,9 @@
 -
 -	VkShaderModule		vertModule;
 -	VkShaderModule		fragModule;
+-	VkShaderModule		colorResolveVertModule;
+-	VkShaderModule		colorResolveFragModule;
+-	VkPipeline			colorResolvePipeline;
 -	VkShaderModule		screenVertModule;
 -	VkShaderModule		screenFragModule;
 -	VkShaderModule		skyVertModule;
@@ -299,6 +376,9 @@
 -	VkShaderModule		glslMaterialFragModules[ VK_GLSL_PROGRAM_FAMILY_COUNT ];
 -	VkShaderModule		interactionVertModule;
 -	VkShaderModule		interactionFragModule;
+-	VkShaderModule		probeEnvironmentFragModule;
+-	VkShaderModule		bakedEnvironmentFragModule;
+-	VkShaderModule		bakedProbeEnvironmentFragModule;
 -	VkShaderModule		interactionShadowVertModule;
 -	VkShaderModule		interactionShadowFragModule;
 -	VkShaderModule		interactionShadowPointVertModule;
@@ -307,6 +387,10 @@
 -	VkShaderModule		casterFragModule;
 -	VkShaderModule		pointCasterVertModule;
 -	VkShaderModule		pointCasterFragModule;
+-	VkShaderModule		momentCasterVertModule;
+-	VkShaderModule		momentCasterFragModule;
+-	VkShaderModule		pointMomentCasterVertModule;
+-	VkShaderModule		pointMomentCasterFragModule;
 -	VkShaderModule		stencilShadowVertModule;
 -	VkShaderModule		stencilShadowFragModule;
 -	VkShaderModule		shadowOverlayVertModule;
@@ -317,9 +401,16 @@
 -	VkShaderModule		fogFragModule;
 -	VkShaderModule		blendLightVertModule;
 -	VkShaderModule		blendLightFragModule;
+-	VkShaderModule		softParticleFragModule;
 -	VkShaderModule		gpuSkinningModule;
 -	VkShaderModule		temporalResolveVertModule;
 -	VkShaderModule		temporalResolveFragModule;
+-	VkShaderModule		sceneScaleFragModule;	// r_resolutionScaleMode 2/3
+-	VkShaderModule		displayColorFragModule;
+-	VkPipeline			displayColorPipeline;
+-	idImage *			displayColorSourceImages[ VK_FRAMES_IN_FLIGHT ];
+-	bool				displayColorMapped;
+-	bool				displayColorMappingWarned;
 -	VkDescriptorSetLayout setLayout;
 -	VkDescriptorSetLayout uboSetLayout;		// one dynamic uniform buffer (interaction block ring)
 -	// shadow receiver set: binding 0 = atlas + compare sampler (fragment),
@@ -333,6 +424,7 @@
 -	// interactions: 6 single-combined-sampler sets (0=specTable, 1=bump,
 -	// 2=falloff, 3=lightProjection, 4=diffuse, 5=specular) + set 6 dynamic UBO
 -	VkPipelineLayout	interactionPipelineLayout;
+-	VkPipelineLayout	probeEnvironmentPipelineLayout;
 -	// shadow-receiving interactions add set 7 (atlas compare sampler + shadow UBO)
 -	VkPipelineLayout	shadowInteractionPipelineLayout;
 -	// r_shadowMapDebugOverlay: set 0 is the same shadow receiver layout, so the
@@ -344,11 +436,21 @@
 -	VkPipelineLayout	fogBlendPipelineLayout;
 -	VkPipeline			casterPipeline;			// lazily built; depth-only atlas caster
 -	VkPipeline			pointCasterPipeline;	// lazily built; depth-only cube-face caster
+-	VkPipeline			momentCasterPipeline;	// lazily built; translucent moments, projected
+-	VkPipeline			pointMomentCasterPipeline;	// lazily built; translucent moments, point faces
+-	// r_shadowMapTranslucentMoments: what bindings 3-5 of every shadow set
+-	// name, the moment atlas or vk_ShadowMap's cleared placeholder
+-	VkImageView			shadowMomentViews[ 3 ];
+-	VkSampler			shadowMomentSampler;
 -	vkSpecialPipeline_t	specialPipelines[ VK_MAX_SPECIAL_PIPELINES ];
 -	int					numSpecialPipelines;
 -	vkGuiPipeline_t		pipelines[ VK_MAX_GUI_PIPELINES ];
 -	int					numPipelines;
 -	int					lastPipelineMRU;	// index of the last exact-key VK_GuiExecutor_GetPipeline result
+-	// the world walker sets this around a perforated surface
+-	// (RB_UseAlphaToCoverage); VK_GuiExecutor_GetPipeline honours it on
+-	// multisampled targets
+-	bool				alphaToCoverageSurface;
 -	vkGuiPipeline_t		screenPipelines[ VK_MAX_SCREEN_PIPELINES ];
 -	int					numScreenPipelines;
 -	vkCubePipeline_t	cubePipelines[ VK_MAX_CUBE_PIPELINES ];
@@ -361,6 +463,10 @@
 -	int					numBlendLightPipelines;
 -	vkGuiPipeline_t		temporalResolvePipelines[ VK_MAX_TEMPORAL_RESOLVE_PIPELINES ];
 -	int					numTemporalResolvePipelines;
+-	vkGuiPipeline_t		sceneScalePipelines[ VK_MAX_TEMPORAL_RESOLVE_PIPELINES ];
+-	int					numSceneScalePipelines;
+-	vkPostPipeline_t	postPipelines[ VK_MAX_POST_PIPELINES ];
+-	int					numPostPipelines;
 -	VkFormat			pipelineTargetFormat;	// swapchain format the pipelines were built for
 +#include <atomic>
 +#pragma hdrstop
@@ -368,6 +474,7 @@
 +#include "../tr_local.h"
 +#include "../Model_local.h"
 +#include "../RenderModuleAPI.h"
++#include "../HDRExposureCore.h"
 +
 +#undef snprintf
 +#undef vsnprintf
@@ -380,12 +487,14 @@
 +#ifndef UINT_MAX
 +#define UINT_MAX	0xffffffffu
 +#endif
++#include <chrono>
 +#include <cstdio>
 +#include <cstring>
 +#include "volk.h"
 +#include "vk_mem_alloc.h"
 +
 +#include "VulkanDevice.h"
++#include "vk_PBRProbes.h"
 +#include "VulkanGpuFrameTiming.h"
 +#include "../ClassicGuiDomain.h"
 +#include "../ClassicCinematicPostDomain.h"
@@ -399,11 +508,18 @@
 +#include "../RendererMetrics.h"
 +#include "../ScenePackets.h"
 +#include "vk_Image.h"
++#include "vk_ProbeSource.h"
 +// vk_ShadowMap.h: VK_ShadowMap_Shutdown + the point cube pool size the
 +// descriptor pool budgets for (Phase F2a/F2b)
 +#include "vk_ShadowMap.h"
++#include "vk_ExecutorHooks.h"
++#include "vk_HDRScene.h"
++#include "vk_MaterialPrograms.h"
 +#include "shaders/gui_shaders_spv.h"
 +#include "shaders/temporal_resolve_spv.h"
++#include "shaders/target_test_spv.h"
++#include "shaders/color_resolve_spv.h"
++#include "shaders/display_color_mapping_spv.h"
 +
 +extern idCVar r_skipDynamicTextures;
 +
@@ -432,6 +548,21 @@
 +// open that every 3D frame then throws away.
 +static void VK_Exec_ClearSwapchainFallback( void );
 +bool VK_GuiExecutor_EndFrameAndPresent( void );
++void VK_PostProcess_Shutdown( void );
++int VK_PostProcess_WorldDepthCaptures( const viewDef_t *viewDef );
++int VK_PostProcess_DepthFillPhase( const drawSurf_t *surf, int captures );
++void VK_PostProcess_CaptureWorldDepth( const viewDef_t *viewDef, int fillPhase, int captures,
++		const int phaseDrawn[ 4 ] );
++bool VK_PostProcess_PrepareSSAOField( const viewDef_t *viewDef );
++bool VK_PostProcess_DrawSceneEffects( const viewDef_t *viewDef );
++bool VK_SceneEffects_DrawPreFog( const viewDef_t *viewDef, int processed );
++bool VK_PostProcess_DrawUnderwater( const viewDef_t *viewDef );
++void VK_DebugTools_DrawView( const viewDef_t *viewDef );
++static void VK_Exec_ReleaseStencilReadbacks( void );
++static void VK_Exec_PrintStencilReadbacks( int slot );
++static void VK_Exec_ReleaseHDRReadbacks( void );
++static void VK_Exec_ConsumeHDRReadback( int slot );
++static void VK_Exec_DiscardHDRReadback( int slot );
 +static bool VK_GuiExecutor_SubmitFrame( bool present );
 +VkDescriptorSet VK_Exec_InteractionUniformSet( void );
 +int VK_Exec_InteractionUniformAlloc( const void *data, int bytes );
@@ -1590,9 +1721,11 @@
 +Executor state
 +====================
 +*/
-+// world views stream all visible geometry through the rings each frame
-+// (the vertex cache is CPU-backed); sized for q4dm2-scale 3D views
-+static const int VK_VERTEX_RING_BYTES = 32 * 1024 * 1024;
++// World geometry and output-resolution vector UI share this frame-local ring.
++// A locked 4K optic uses about 43 MiB after coverage/paint consolidation. World
++// geometry, stencil volumes and composition passes need their own headroom;
++// keep them together instead of dropping late HUD/mask or shadow submissions.
++static const int VK_VERTEX_RING_BYTES = 96 * 1024 * 1024;
 +static const int VK_INDEX_RING_BYTES = 8 * 1024 * 1024;
 +static const int VK_GPU_SKINNING_WORKGROUP_SIZE = 64;
 +static const int VK_GPU_SKINNING_MEMO_SIZE = 2048; // power of two
@@ -1602,16 +1735,20 @@
 +static const int VK_MAX_ENV_PIPELINES = 32;
 +static const int VK_MAX_PROGRAM_PIPELINES = 128;
 +static const int VK_MAX_BLEND_LIGHT_PIPELINES = 32;
-+static const int VK_MAX_SPECIAL_PIPELINES = 64;
++static const int VK_MAX_SPECIAL_PIPELINES = 96;
 +static const int VK_MAX_TEMPORAL_RESOLVE_PIPELINES = 8;
-+static const int VK_MAX_DESCRIPTOR_SETS = 4096;
++static const int VK_MAX_POST_PIPELINES = 128;
++static const int VK_MAX_DESCRIPTOR_SETS = VK_MAX_IMAGES;
 +// rvspecial_depth.fs linearizes the Raven controller's depth texture with
 +// this historical near-plane convention.  The Vulkan path samples raw depth,
 +// so it must use the same value after translating normalized focus/range.
 +static const float VK_RVSPECIAL_DEPTH_ZNEAR = 0.25f;
 +// Descriptor sets displaced by a generation change during command recording
-+// cannot be rewritten until the slot fence completes.
-+static const int VK_MAX_RETIRED_SETS = 128;
++// cannot be rewritten until the slot fence completes. A bulk image reload may
++// replace every cached image in one frame, in addition to feedback resizes.
++// Keep a full image-table generation plus the ordinary per-frame reserve;
++// descriptor-pool and rollback storage use this same capacity below.
++static const int VK_MAX_RETIRED_SETS = VK_MAX_IMAGES + 128;
 +// Distinct colour attachments a single frame can render into. The shipped
 +// frame uses five (swapchain, _forwardRenderAlbedo, three post targets); the
 +// list degrades safely to "assume already used" (LOAD) if it ever overflows.
@@ -1634,7 +1771,10 @@
 +} vkRing_t;
 +
 +typedef struct vkPipelineTarget_s {
-+	VkFormat			colorFormat;
++	bool                hdrAccumulation;
++	bool                lowerOrigin;
++	uint32_t			colorCount;
++	VkFormat			colorFormats[ VK_MAX_COLOR_ATTACHMENTS ];
 +	VkFormat			depthFormat;
 +	VkFormat			stencilFormat;
 +	VkSampleCountFlagBits samples;
@@ -1643,9 +1783,25 @@
 +typedef struct vkGuiPipeline_s {
 +	int				stateBits;		// GLS blend + per-channel write masks
 +	bool			separateColor;	// tightly-packed RGBA8 stream on binding 1
++	bool			alphaToCoverage;	// multisampled targets only
 +	vkPipelineTarget_t target;
 +	VkPipeline		pipeline;
 +} vkGuiPipeline_t;
++
++// full-screen post passes and the extra geometry passes (vk_PostProcess.cpp,
++// vk_SceneEffects.cpp, vk_DebugTools.cpp), keyed by pass kind, blend state,
++// vertex layout, VK_EXTRA_PIPELINE_* flags and target
++typedef struct vkPostPipeline_s {
++	int				kind;
++	int				stateBits;
++	int				vertexLayout;
++	int				flags;
++	vkPipelineTarget_t target;
++	VkPipeline		pipeline;
++} vkPostPipeline_t;
++
++// VK_Exec_ExtraPipeline kinds used inside this file (vk_ExecutorHooks.h)
++static const int VK_EXTRA_KIND_SOFT_PARTICLE = VK_EXTRA_KIND_EXECUTOR_BASE;
 +
 +typedef struct vkProgramPipeline_s {
 +	int				family;			// ARB family, or 0x100 + vkGLSLProgramFamily_t
@@ -1664,9 +1820,24 @@
 +
 +enum vkSpecialPipelineKind_t {
 +	VK_SPECIAL_INTERACTION,
++	VK_SPECIAL_PROBE_ENVIRONMENT,
++	VK_SPECIAL_PROBE_ENVIRONMENT_TRANSPARENT,
++	VK_SPECIAL_BAKED_ENVIRONMENT,
++	VK_SPECIAL_BAKED_PROBE_ENVIRONMENT,
 +	VK_SPECIAL_SHADOW_INTERACTION,
 +	VK_SPECIAL_POINT_SHADOW_INTERACTION,
++	// Native ordered PBR transparency replays admitted interaction draws in
++	// the material walk's sort position: the first composites through the
++	// authored source alpha, the rest add through the same alpha.
++	VK_SPECIAL_PBR_TRANSPARENT_COMPOSITE,
++	VK_SPECIAL_PBR_TRANSPARENT_ADD,
++	VK_SPECIAL_SHADOW_PBR_TRANSPARENT_COMPOSITE,
++	VK_SPECIAL_SHADOW_PBR_TRANSPARENT_ADD,
++	VK_SPECIAL_POINT_SHADOW_PBR_TRANSPARENT_COMPOSITE,
++	VK_SPECIAL_POINT_SHADOW_PBR_TRANSPARENT_ADD,
 +	VK_SPECIAL_STENCIL_SHADOW,
++	VK_SPECIAL_STENCIL_SHADOW_DEBUG_LINE,
++	VK_SPECIAL_STENCIL_SHADOW_DEBUG_FILL,
 +	VK_SPECIAL_FOG,
 +	VK_SPECIAL_SHADOW_OVERLAY_PANEL,
 +	VK_SPECIAL_SHADOW_OVERLAY_POINT_PANEL,
@@ -1704,6 +1875,15 @@
 +	float			modelRow1[ 4 ];
 +	float			modelRow2[ 4 ];
 +} vkBumpyEnvironmentBlock_t;
++
++// std140 layout of SoftParticleBlock in soft_particle.frag
++typedef struct vkSoftParticleBlock_s {
++	float			depthInfo[ 4 ];		// P[10], P[14], fade distance, additive blend
++	float			viewInfo[ 4 ];		// viewport origin (OpenGL window space), 1 / depth texture size
++	float			framebuffer[ 4 ];	// x: framebuffer height
++} vkSoftParticleBlock_t;
++
++bool VK_SoftParticleStageSupported( const drawSurf_t *surf, const shaderStage_t *pStage );
 +
 +// std140-compatible block consumed by temporal_resolve.frag. Keep this under
 +// the established 256-byte dynamic-uniform slice so the temporal pass can
@@ -1786,6 +1966,9 @@
 +
 +	VkShaderModule		vertModule;
 +	VkShaderModule		fragModule;
++	VkShaderModule		colorResolveVertModule;
++	VkShaderModule		colorResolveFragModule;
++	VkPipeline			colorResolvePipeline;
 +	VkShaderModule		screenVertModule;
 +	VkShaderModule		screenFragModule;
 +	VkShaderModule		skyVertModule;
@@ -1809,6 +1992,9 @@
 +	VkShaderModule		glslMaterialFragModules[ VK_GLSL_PROGRAM_FAMILY_COUNT ];
 +	VkShaderModule		interactionVertModule;
 +	VkShaderModule		interactionFragModule;
++	VkShaderModule		probeEnvironmentFragModule;
++	VkShaderModule		bakedEnvironmentFragModule;
++	VkShaderModule		bakedProbeEnvironmentFragModule;
 +	VkShaderModule		interactionShadowVertModule;
 +	VkShaderModule		interactionShadowFragModule;
 +	VkShaderModule		interactionShadowPointVertModule;
@@ -1817,6 +2003,10 @@
 +	VkShaderModule		casterFragModule;
 +	VkShaderModule		pointCasterVertModule;
 +	VkShaderModule		pointCasterFragModule;
++	VkShaderModule		momentCasterVertModule;
++	VkShaderModule		momentCasterFragModule;
++	VkShaderModule		pointMomentCasterVertModule;
++	VkShaderModule		pointMomentCasterFragModule;
 +	VkShaderModule		stencilShadowVertModule;
 +	VkShaderModule		stencilShadowFragModule;
 +	VkShaderModule		shadowOverlayVertModule;
@@ -1827,9 +2017,16 @@
 +	VkShaderModule		fogFragModule;
 +	VkShaderModule		blendLightVertModule;
 +	VkShaderModule		blendLightFragModule;
++	VkShaderModule		softParticleFragModule;
 +	VkShaderModule		gpuSkinningModule;
 +	VkShaderModule		temporalResolveVertModule;
 +	VkShaderModule		temporalResolveFragModule;
++	VkShaderModule		sceneScaleFragModule;	// r_resolutionScaleMode 2/3
++	VkShaderModule		displayColorFragModule;
++	VkPipeline			displayColorPipeline;
++	idImage *			displayColorSourceImages[ VK_FRAMES_IN_FLIGHT ];
++	bool				displayColorMapped;
++	bool				displayColorMappingWarned;
 +	VkDescriptorSetLayout setLayout;
 +	VkDescriptorSetLayout uboSetLayout;		// one dynamic uniform buffer (interaction block ring)
 +	// shadow receiver set: binding 0 = atlas + compare sampler (fragment),
@@ -1843,6 +2040,7 @@
 +	// interactions: 6 single-combined-sampler sets (0=specTable, 1=bump,
 +	// 2=falloff, 3=lightProjection, 4=diffuse, 5=specular) + set 6 dynamic UBO
 +	VkPipelineLayout	interactionPipelineLayout;
++	VkPipelineLayout	probeEnvironmentPipelineLayout;
 +	// shadow-receiving interactions add set 7 (atlas compare sampler + shadow UBO)
 +	VkPipelineLayout	shadowInteractionPipelineLayout;
 +	// r_shadowMapDebugOverlay: set 0 is the same shadow receiver layout, so the
@@ -1854,11 +2052,21 @@
 +	VkPipelineLayout	fogBlendPipelineLayout;
 +	VkPipeline			casterPipeline;			// lazily built; depth-only atlas caster
 +	VkPipeline			pointCasterPipeline;	// lazily built; depth-only cube-face caster
++	VkPipeline			momentCasterPipeline;	// lazily built; translucent moments, projected
++	VkPipeline			pointMomentCasterPipeline;	// lazily built; translucent moments, point faces
++	// r_shadowMapTranslucentMoments: what bindings 3-5 of every shadow set
++	// name, the moment atlas or vk_ShadowMap's cleared placeholder
++	VkImageView			shadowMomentViews[ 3 ];
++	VkSampler			shadowMomentSampler;
 +	vkSpecialPipeline_t	specialPipelines[ VK_MAX_SPECIAL_PIPELINES ];
 +	int					numSpecialPipelines;
 +	vkGuiPipeline_t		pipelines[ VK_MAX_GUI_PIPELINES ];
 +	int					numPipelines;
 +	int					lastPipelineMRU;	// index of the last exact-key VK_GuiExecutor_GetPipeline result
++	// the world walker sets this around a perforated surface
++	// (RB_UseAlphaToCoverage); VK_GuiExecutor_GetPipeline honours it on
++	// multisampled targets
++	bool				alphaToCoverageSurface;
 +	vkGuiPipeline_t		screenPipelines[ VK_MAX_SCREEN_PIPELINES ];
 +	int					numScreenPipelines;
 +	vkCubePipeline_t	cubePipelines[ VK_MAX_CUBE_PIPELINES ];
@@ -1871,6 +2079,10 @@
 +	int					numBlendLightPipelines;
 +	vkGuiPipeline_t		temporalResolvePipelines[ VK_MAX_TEMPORAL_RESOLVE_PIPELINES ];
 +	int					numTemporalResolvePipelines;
++	vkGuiPipeline_t		sceneScalePipelines[ VK_MAX_TEMPORAL_RESOLVE_PIPELINES ];
++	int					numSceneScalePipelines;
++	vkPostPipeline_t	postPipelines[ VK_MAX_POST_PIPELINES ];
++	int					numPostPipelines;
 +	VkFormat			pipelineTargetFormat;	// swapchain format the pipelines were built for
 +
 +	vkRing_t			vertexRings[ VK_FRAMES_IN_FLIGHT ];
@@ -1882,7 +2094,7 @@
 +	bool				shadowSetsHaveAtlas;	// compare + raw bindings written with a live atlas view
 +	bool				gpuSkinningAvailable;
 +
-+	vkDescriptorCacheEntry_t descriptorCache[ 4096 ];	// parallel to the image table
++	vkDescriptorCacheEntry_t descriptorCache[ VK_MAX_IMAGES ];	// parallel to the image table
 +	VkDescriptorSet		retiredSets[ VK_FRAMES_IN_FLIGHT ][ VK_MAX_RETIRED_SETS ];
 +	int					numRetiredSets[ VK_FRAMES_IN_FLIGHT ];
 +
@@ -1912,12 +2124,20 @@
 +	bool				swapchainScopeRecorded;
 +	int					frameSlot;
 +	uint32_t			swapImageIndex;
++	// The frame's final color image and view: the acquired swapchain image,
++	// or a hidden window's offscreen image (vkCtx.offscreenFrames), which
++	// screenshots read the same way and which is never presented.
++	VkImage				frameImage;
++	VkImageView			frameImageView;
++	bool				framePresentable;
 +	VkCommandBuffer		cmd;
 +	float				clearColor[ 4 ];
 +	int					boundVertexOffset;	// binding-0 ring offset of the last VK_Exec_BindTriGeometry
 +	idRenderTexture *	activeRenderTexture;
-+	vkImageEntry_t *	activeColorEntry;
++	int					activeCubeFace;
++	vkImageEntry_t *	activeColorEntries[ VK_MAX_COLOR_ATTACHMENTS ];
 +	vkImageEntry_t *	activeDepthEntry;
++	VkImageView			activeColorAttachmentViews[ VK_MAX_COLOR_ATTACHMENTS ];
 +	VkImageView			activeDepthAttachmentView;
 +	VkExtent2D			activeExtent;
 +	vkPipelineTarget_t	activePipelineTarget;
@@ -1928,6 +2148,10 @@
 +	idImage *			temporalSceneColorImage;
 +	idImage *			temporalSceneDepthImage;
 +	idRenderTexture *	temporalSceneRenderTexture;
++	idImage *			temporalSceneResolveColorImage;
++	idImage *			temporalSceneResolveDepthImage;
++	idRenderTexture *	temporalSceneResolveRenderTexture;
++	int					temporalSceneRequestedSamples;
 +	int				temporalSceneWidth;
 +	int				temporalSceneHeight;
 +	int				temporalNativeWidth;
@@ -1971,9 +2195,23 @@
 +	uint64				gpuSkinningRingFallbacks;
 +	uint64				gpuSkinningMemoFallbacks;
 +	uint64				gpuSkinningValidationFallbacks;
++	uint64				gpuSkinningDeferredSurfaces;
++	uint64				gpuSkinningDeferredRepairs;
 +} vkGuiExecutor_t;
 +
 +static vkGuiExecutor_t vkExec;
++
++// Native PBR preparation may allocate image sets but never bind them. Retain
++// both cache and retirement ownership until the complete view can commit.
++static struct {
++	bool active;
++	int slot;
++	int retiredCount;
++	int allocatedCount;
++	vkDescriptorCacheEntry_t cache[ VK_MAX_IMAGES ];
++	VkDescriptorSet retired[ VK_MAX_RETIRED_SETS ];
++	VkDescriptorSet allocated[ VK_MAX_IMAGES + VK_MAX_RETIRED_SETS ];
++} vkPBRDescriptorCheckpoint;
 +static bool vkGpuSkinningBackendRequested = true;
 +
 +typedef struct vkSceneScaleState_s {
@@ -2924,15 +3162,7 @@
 +	if ( overruns != NULL )  { *overruns = vk3dOverruns; }
 +	if ( halfPairs != NULL ) { *halfPairs = vk3dHalfPairs; }
 +}
- 
--	vkRing_t			vertexRings[ VK_FRAMES_IN_FLIGHT ];
--	vkRing_t			indexRings[ VK_FRAMES_IN_FLIGHT ];
--	vkRing_t			uniformRings[ VK_FRAMES_IN_FLIGHT ];
--	VkDescriptorSet		uniformRingSets[ VK_FRAMES_IN_FLIGHT ];
--	VkDescriptorSet		shadowSets[ VK_FRAMES_IN_FLIGHT ];
--	VkDescriptorSet		gpuSkinningSets[ VK_FRAMES_IN_FLIGHT ];
--	bool				shadowSetsHaveAtlas;	// compare + raw bindings written with a live atlas view
--	bool				gpuSkinningAvailable;
++
 +// D-107: the window-swapchain rules above, as counters for !xr3diag.
 +// winSkips = 3D frames dropped rather than rendered to the window,
 +// acqTimeouts = bounded acquires after leaving 3D that found no image,
@@ -2945,9 +3175,14 @@
 +	if ( grace != NULL )         { *grace = vk3dWindowGrace ? 1 : 0; }
 +}
  
--	vkDescriptorCacheEntry_t descriptorCache[ 4096 ];	// parallel to the image table
--	VkDescriptorSet		retiredSets[ VK_FRAMES_IN_FLIGHT ][ VK_MAX_RETIRED_SETS ];
--	int					numRetiredSets[ VK_FRAMES_IN_FLIGHT ];
+-	vkRing_t			vertexRings[ VK_FRAMES_IN_FLIGHT ];
+-	vkRing_t			indexRings[ VK_FRAMES_IN_FLIGHT ];
+-	vkRing_t			uniformRings[ VK_FRAMES_IN_FLIGHT ];
+-	VkDescriptorSet		uniformRingSets[ VK_FRAMES_IN_FLIGHT ];
+-	VkDescriptorSet		shadowSets[ VK_FRAMES_IN_FLIGHT ];
+-	VkDescriptorSet		gpuSkinningSets[ VK_FRAMES_IN_FLIGHT ];
+-	bool				shadowSetsHaveAtlas;	// compare + raw bindings written with a live atlas view
+-	bool				gpuSkinningAvailable;
 +// The publish accounting, which is what 0.1.0.58 had no way to report: how many
 +// eye frames were RENDERED into a present image, how many PAIRS reached the
 +// panel, how many engine frames the trip took (p50), and how many finished
@@ -2961,6 +3196,13 @@
 +	if ( superseded != NULL )    { *superseded = vk3dSuperseded; }
 +}
  
+-	vkDescriptorCacheEntry_t descriptorCache[ VK_MAX_IMAGES ];	// parallel to the image table
+-	VkDescriptorSet		retiredSets[ VK_FRAMES_IN_FLIGHT ][ VK_MAX_RETIRED_SETS ];
+-	int					numRetiredSets[ VK_FRAMES_IN_FLIGHT ];
++/*
++====================
++OpenQ4_VK3D_AcquirePresentPair / OpenQ4_VK3D_ReleasePresentPair
+ 
 -	// frame-in-progress state
 -	bool				frameOpen;
 -	// The acquire semaphore is consumed by the first submission that uses
@@ -2970,12 +3212,20 @@
 -	bool				mainScopeOpen;		// the swapchain dynamic-rendering scope is recording
 -	int					frameSlot;
 -	uint32_t			swapImageIndex;
+-	// The frame's final color image and view: the acquired swapchain image,
+-	// or a hidden window's offscreen image (vkCtx.offscreenFrames), which
+-	// screenshots read the same way and which is never presented.
+-	VkImage				frameImage;
+-	VkImageView			frameImageView;
+-	bool				framePresentable;
 -	VkCommandBuffer		cmd;
 -	float				clearColor[ 4 ];
 -	int					boundVertexOffset;	// binding-0 ring offset of the last VK_Exec_BindTriGeometry
 -	idRenderTexture *	activeRenderTexture;
--	vkImageEntry_t *	activeColorEntry;
+-	int					activeCubeFace;
+-	vkImageEntry_t *	activeColorEntries[ VK_MAX_COLOR_ATTACHMENTS ];
 -	vkImageEntry_t *	activeDepthEntry;
+-	VkImageView			activeColorAttachmentViews[ VK_MAX_COLOR_ATTACHMENTS ];
 -	VkImageView			activeDepthAttachmentView;
 -	VkExtent2D			activeExtent;
 -	vkPipelineTarget_t	activePipelineTarget;
@@ -2986,6 +3236,10 @@
 -	idImage *			temporalSceneColorImage;
 -	idImage *			temporalSceneDepthImage;
 -	idRenderTexture *	temporalSceneRenderTexture;
+-	idImage *			temporalSceneResolveColorImage;
+-	idImage *			temporalSceneResolveDepthImage;
+-	idRenderTexture *	temporalSceneResolveRenderTexture;
+-	int					temporalSceneRequestedSamples;
 -	int				temporalSceneWidth;
 -	int				temporalSceneHeight;
 -	int				temporalNativeWidth;
@@ -3020,9 +3274,10 @@
 -	int					pendingSpecialEffectsMask;
 -	idRenderTexture *	pendingSpecialEffectsSource;
 -	bool				pendingSpecialEffectsNeedsResolve;
-+/*
-+====================
-+OpenQ4_VK3D_AcquirePresentPair / OpenQ4_VK3D_ReleasePresentPair
++The compositor's hand-off. Acquire returns the newest GPU-COMPLETE PAIR — both
++eyes, from one engine frame, at one game time — and marks it in use; the caller
++MUST release it from the completion handler of the command buffer that reads it,
++because a Metal blit is not finished when the encoding call returns.
  
 -	vkVertUpload_t		vertMemo[ VK_TRI_MEMO_SIZE ];
 -	vkIdxUpload_t		idxMemo[ VK_TRI_MEMO_SIZE ];
@@ -3032,37 +3287,14 @@
 -	uint64				gpuSkinningRingFallbacks;
 -	uint64				gpuSkinningMemoFallbacks;
 -	uint64				gpuSkinningValidationFallbacks;
+-	uint64				gpuSkinningDeferredSurfaces;
+-	uint64				gpuSkinningDeferredRepairs;
 -} vkGuiExecutor_t;
-+The compositor's hand-off. Acquire returns the newest GPU-COMPLETE PAIR — both
-+eyes, from one engine frame, at one game time — and marks it in use; the caller
-+MUST release it from the completion handler of the command buffer that reads it,
-+because a Metal blit is not finished when the encoding call returns.
- 
--static vkGuiExecutor_t vkExec;
--static bool vkGpuSkinningBackendRequested = true;
 +Returns 0 until a pair has actually been published: sampling an image whose
 +contents are undefined is vkQuake D-032's gate, and it is also what makes a
 +Panel Resolution change safe (release zeroes everRendered).
  
--typedef struct vkSceneScaleState_s {
--	bool			active;
--	bool			backendOwned;
--	bool			projectionRecentered;
--	const viewDef_t *rootView;
--	int			nativeWidth;
--	int			nativeHeight;
--	int			targetWidth;
--	int			targetHeight;
--	float			nativeProjectionOffsetX;
--	float			nativeProjectionOffsetY;
--	idScreenRect	nativeViewport;
--	typedef struct rectRestore_s {
--		idScreenRect *rect;
--		idScreenRect original;
--	} rectRestore_t;
--	idList<rectRestore_t> rectRestores;
--	idHashIndex rectRestoreHash;
--} vkSceneScaleState_t;
+-static vkGuiExecutor_t vkExec;
 +A MONO pair — one rendered outside UpdateScreen's eye loop, e.g. a lone capture
 +frame — hands the same texture back for both eyes rather than a stale right one.
 +====================
@@ -3096,6 +3328,51 @@
 +	return ok;
 +}
  
+-// Native PBR preparation may allocate image sets but never bind them. Retain
+-// both cache and retirement ownership until the complete view can commit.
+-static struct {
+-	bool active;
+-	int slot;
+-	int retiredCount;
+-	int allocatedCount;
+-	vkDescriptorCacheEntry_t cache[ VK_MAX_IMAGES ];
+-	VkDescriptorSet retired[ VK_MAX_RETIRED_SETS ];
+-	VkDescriptorSet allocated[ VK_MAX_IMAGES + VK_MAX_RETIRED_SETS ];
+-} vkPBRDescriptorCheckpoint;
+-static bool vkGpuSkinningBackendRequested = true;
+-
+-typedef struct vkSceneScaleState_s {
+-	bool			active;
+-	bool			backendOwned;
+-	bool			projectionRecentered;
+-	const viewDef_t *rootView;
+-	int			nativeWidth;
+-	int			nativeHeight;
+-	int			targetWidth;
+-	int			targetHeight;
+-	float			nativeProjectionOffsetX;
+-	float			nativeProjectionOffsetY;
+-	idScreenRect	nativeViewport;
+-	typedef struct rectRestore_s {
+-		idScreenRect *rect;
+-		idScreenRect original;
+-	} rectRestore_t;
+-	idList<rectRestore_t> rectRestores;
+-	idHashIndex rectRestoreHash;
+-} vkSceneScaleState_t;
++extern "C" void OpenQ4_VK3D_ReleasePresentPair( int slot ) {
++	if ( slot < 0 || slot >= VK3D_PRESENT_PAIRS ) {
++		return;
++	}
++	pthread_mutex_lock( &vk3dMutex );
++	if ( vk3dReaders[ slot ] > 0 ) {
++		vk3dReaders[ slot ]--;
++	}
++	pthread_cond_broadcast( &vk3dCond );
++	pthread_mutex_unlock( &vk3dMutex );
++}
++#endif /* OPENQ4_VISIONOS_3D */
+ 
 -// Shared-domain preflight is allowed to populate the ordinary geometry rings,
 -// but it has not taken framebuffer ownership yet. Snapshot the bounded upload
 -// state so any later rejection can return the established classic walker to
@@ -3110,46 +3387,31 @@
 -	vkIdxUpload_t	idxMemo[ VK_TRI_MEMO_SIZE ];
 -	vkGpuSkinningMemo_t gpuSkinningMemo[ VK_GPU_SKINNING_MEMO_SIZE ];
 -} vkSharedGeometryCheckpoint_t;
-+extern "C" void OpenQ4_VK3D_ReleasePresentPair( int slot ) {
-+	if ( slot < 0 || slot >= VK3D_PRESENT_PAIRS ) {
-+		return;
-+	}
-+	pthread_mutex_lock( &vk3dMutex );
-+	if ( vk3dReaders[ slot ] > 0 ) {
-+		vk3dReaders[ slot ]--;
-+	}
-+	pthread_cond_broadcast( &vk3dCond );
-+	pthread_mutex_unlock( &vk3dMutex );
-+}
-+#endif /* OPENQ4_VISIONOS_3D */
- 
+-
 -static vkSharedGeometryCheckpoint_t vkSharedGeometryCheckpoint;
-+// The frame's colour target, its extent and its depth. In 3D these are the
-+// offscreen present pair's eye image and the eye-sized depth image for the frame
-+// slot; everywhere else they are the acquired swapchain image and the
-+// swapchain-sized depth, textually as they have always been (the iOS build
-+// preprocesses to exactly the old expressions).
++// The frame's extent and depth. In 3D these are the eye size and the eye-sized
++// depth image for the frame slot; everywhere else they are the swapchain-sized
++// ones, textually as they have always been (the iOS build preprocesses to
++// exactly the old expressions). The colour target itself is vkExec.frameImage /
++// frameImageView (upstream v0.14), which BeginFrame points at the eye image in
++// a 3D frame (D-116).
 +//
 +// In 3D the index is PAIR * 2 + EYE, not a swapchain image index: the two are
 +// never the same number and nothing may index a swapchain-sized array with it.
 +#if defined( OPENQ4_VISIONOS_3D )
 +#define VK3D_EYE_OF( idx )			vk3dPairs[ (idx) / VK3D_EYE_COUNT ].eye[ (idx) % VK3D_EYE_COUNT ]
-+#define VK3D_TARGET_IMAGE( idx )	( vk3dActive ? VK3D_EYE_OF( idx ).image : vkCtx.swapchainImages[ (idx) ] )
-+#define VK3D_TARGET_VIEW( idx )		( vk3dActive ? VK3D_EYE_OF( idx ).view : vkCtx.swapchainViews[ (idx) ] )
 +#define VK3D_FRAME_EXTENT			( vk3dActive ? vk3dEyeExtent : vkCtx.swapchainExtent )
 +#define VK3D_DEPTH_IMAGE( slot )	( vk3dActive ? vk3dDepthImages[ (slot) ] : vkCtx.depthImages[ (slot) ] )
 +#define VK3D_DEPTH_VIEW( slot )		( vk3dActive ? vk3dDepthViews[ (slot) ] : vkCtx.depthViews[ (slot) ] )
 +#else
-+#define VK3D_TARGET_IMAGE( idx )	vkCtx.swapchainImages[ (idx) ]
-+#define VK3D_TARGET_VIEW( idx )		vkCtx.swapchainViews[ (idx) ]
 +#define VK3D_FRAME_EXTENT			vkCtx.swapchainExtent
 +#define VK3D_DEPTH_IMAGE( slot )	vkCtx.depthImages[ (slot) ]
 +#define VK3D_DEPTH_VIEW( slot )		vkCtx.depthViews[ (slot) ]
 +#endif
  
- static vkPipelineTarget_t VK_Exec_SwapchainPipelineTarget( void ) {
- 	vkPipelineTarget_t target;
-@@ -2876,8 +5064,24 @@
+ // Image attachments retain the canonical GL window origin. Presentation
+ // to the top-down swapchain normalizes the stored image at its consumer.
+@@ -3628,8 +5813,24 @@
  		memset( &vkExec, 0, sizeof( vkExec ) );
  		return;
  	}
@@ -3171,11 +3433,11 @@
  	VK_ShadowMap_Shutdown();
  	VK_GpuSkinning_DestroyResources();
 +	VK_GpuTimes_Shutdown();
- 	for ( int i = 0; i < vkExec.numPipelines; i++ ) {
- 		if ( vkExec.pipelines[ i ].pipeline != VK_NULL_HANDLE ) {
- 			vkDestroyPipeline( vkCtx.device, vkExec.pipelines[ i ].pipeline, NULL );
-@@ -3124,7 +5328,16 @@
- 	static bool loggedInitFailed = false;
+ 	if ( vkExec.colorResolvePipeline != VK_NULL_HANDLE ) {
+ 		vkDestroyPipeline( vkCtx.device, vkExec.colorResolvePipeline, NULL );
+ 	}
+@@ -3943,7 +6144,16 @@
+ 	if ( vkCtx.presentationBlocked ) return false;
  	if ( vkExec.frameOpen ) {
  		return true;
 +	}
@@ -3191,16 +3453,16 @@
  	if ( !vkCtx.initialized ) {
  		if ( !loggedNotInitialized ) {
  			loggedNotInitialized = true;
-@@ -3215,6 +5428,8 @@
+@@ -4050,6 +6260,8 @@
  	vkCtx.frameSlot = ( vkCtx.frameSlot + 1 ) % VK_FRAMES_IN_FLIGHT;
  	vkCtx.recordingSlot = slot;
  
 +	const bool speeds = VK_Speeds_Enabled();
 +	double stageStart = speeds ? Sys_GetClockTicks() : 0.0;
+ 	const bool timingEnabled = r_rendererMetrics.GetInteger() > 0;
+ 	const unsigned long long fenceWaitBegin = timingEnabled ? R_RendererMetrics_CpuClock() : 0;
  	const VkResult frameFenceResult = vkWaitForFences( vkCtx.device, 1,
- 		&vkCtx.frameFences[ slot ], VK_TRUE, UINT64_MAX );
- 	if ( frameFenceResult != VK_SUCCESS ) {
-@@ -3227,6 +5442,12 @@
+@@ -4071,6 +6283,12 @@
  	// batches referenced; near-free, since the batch was submitted before the
  	// previous frame's submit
  	VK_Device_WaitUploadBatch();
@@ -3210,14 +3472,13 @@
 +	// the fence above retired this slot's previous frame, so its timestamps
 +	// are complete: read them here and nowhere else, and never with WAIT
 +	VK_GpuTimes_Collect( slot );
+ 	if ( vkCtx.presentationBlocked ) return false;
  	VK_Device_FlushDeferredDestroys( slot );
- 	if ( vkExec.numRetiredSets[ slot ] > 0 ) {
- 		vkFreeDescriptorSets( vkCtx.device, vkExec.descriptorPool,
-@@ -3246,18 +5467,205 @@
- 	}
- 
+ 	// A shadow resize seen under the previous recording is applied here,
+@@ -4099,22 +6317,186 @@
+ 	// screenshots read as they would a swapchain image (vkCtx.offscreenFrames).
+ 	const bool presentable = !vkCtx.offscreenFrames;
  	uint32_t imageIndex = 0;
--	VkResult res = vkAcquireNextImageKHR( vkCtx.device, vkCtx.swapchain, UINT64_MAX,
 +#if defined( OPENQ4_VISIONOS_3D )
 +	// Latch the 3D mode HERE and nowhere else: the frame is not open, no
 +	// command buffer is recording, and every downstream target lookup reads
@@ -3362,67 +3623,104 @@
 +		if ( speeds ) {
 +			vkSpeeds.recordStartTicks = Sys_GetClockTicks();
 +		}
-+	} else
++	}
 +#endif
-+	{
-+	stageStart = speeds ? Sys_GetClockTicks() : 0.0;
-+	uint64_t acquireTimeout = UINT64_MAX;
+ 	VkResult res = VK_SUCCESS;
+-	if ( presentable ) {
++	// A 3D frame acquires nothing: its target is the eye image claimed above.
 +#if defined( OPENQ4_VISIONOS_3D )
++	const bool skipAcquire = vk3dActive;
 +	// D-107: 100 ms per attempt while the 2D window is coming back. Long enough
 +	// for any live window at any link rate, short enough that a window that is
 +	// not being displayed costs dropped frames instead of the whole engine.
 +	// Also while the shell has the window's Metal view hidden (3D requested
 +	// but not latched yet, or the EnsureImages fallback).
 +	const bool vk3dBoundedAcquire = vk3dWindowGrace || vk3dWindowHidden.load() != 0;
-+	if ( vk3dBoundedAcquire ) {
-+		acquireTimeout = 100ull * 1000ull * 1000ull;
-+	}
++#else
++	const bool skipAcquire = false;
 +#endif
-+	VkResult res = vkAcquireNextImageKHR( vkCtx.device, vkCtx.swapchain, acquireTimeout,
- 			vkCtx.acquireSemaphores[ slot ], VK_NULL_HANDLE, &imageIndex );
- 	if ( res == VK_ERROR_OUT_OF_DATE_KHR ) {
--		if ( !VK_Device_RecreateSwapchain() ) {
-+		if ( !VK_Device_RecreateSwapchainForReason( VK_RECREATE_ACQUIRE ) ) {
++	if ( presentable && !skipAcquire ) {
+ 		if ( !VK_Device_ServiceWithheldImages() ) {
  			return false;
  		}
--		res = vkAcquireNextImageKHR( vkCtx.device, vkCtx.swapchain, UINT64_MAX,
-+		res = vkAcquireNextImageKHR( vkCtx.device, vkCtx.swapchain, acquireTimeout,
- 				vkCtx.acquireSemaphores[ slot ], VK_NULL_HANDLE, &imageIndex );
- 	}
++		stageStart = speeds ? Sys_GetClockTicks() : 0.0;
+ 		// A presentation engine that withholds images (an occluded Wayland
+ 		// window with FIFO, a compositor stall) must not block the game loop
+ 		// forever. A timeout acquires nothing and signals nothing, so the frame is
+ 		// simply skipped and retried; normal acquisition returns well within it.
+-		const uint64_t acquireTimeout = 1000000000ull;
++		uint64_t acquireTimeout = 1000000000ull;
 +#if defined( OPENQ4_VISIONOS_3D )
-+	if ( vk3dBoundedAcquire ) {
-+		if ( res == VK_TIMEOUT || res == VK_NOT_READY ) {
-+			vk3dAcquireTimeouts++;
-+			vk3dDroppedFrame = tr.frameCount;
-+			if ( vk3dAcquireTimeouts == 1 || ( vk3dAcquireTimeouts % 60 ) == 0 ) {
-+				common->Printf( "xr3d: window not vending images (%s; %d bounded acquire "
-+						"timeout(s)) — frame dropped, engine keeps running\n",
-+						vk3dWindowGrace ? "after the panel" : "Metal view hidden",
-+						vk3dAcquireTimeouts );
++		if ( vk3dBoundedAcquire ) {
++			acquireTimeout = 100ull * 1000ull * 1000ull;
++		}
++#endif
+ 		const unsigned long long acquireBegin = timingEnabled ? R_RendererMetrics_CpuClock() : 0;
+ 		res = vkAcquireNextImageKHR( vkCtx.device, vkCtx.swapchain, acquireTimeout,
+ 				vkCtx.acquireSemaphores[ slot ], VK_NULL_HANDLE, &imageIndex );
+ 		R_RendererMetrics_EndWaitPhase( RENDERER_WAIT_SWAPCHAIN_IMAGE, acquireBegin );
+ 		if ( res == VK_ERROR_OUT_OF_DATE_KHR ) {
+-			if ( !VK_Device_RecreateSwapchain() ) {
++			if ( !VK_Device_RecreateSwapchainForReason( VK_RECREATE_ACQUIRE ) ) {
+ 				return false;
+ 			}
+ 			const unsigned long long retryBegin = timingEnabled ? R_RendererMetrics_CpuClock() : 0;
+@@ -4122,6 +6504,26 @@
+ 					vkCtx.acquireSemaphores[ slot ], VK_NULL_HANDLE, &imageIndex );
+ 			R_RendererMetrics_EndWaitPhase( RENDERER_WAIT_SWAPCHAIN_IMAGE, retryBegin );
+ 		}
++#if defined( OPENQ4_VISIONOS_3D )
++		if ( vk3dBoundedAcquire ) {
++			if ( res == VK_TIMEOUT || res == VK_NOT_READY ) {
++				vk3dAcquireTimeouts++;
++				vk3dDroppedFrame = tr.frameCount;
++				if ( vk3dAcquireTimeouts == 1 || ( vk3dAcquireTimeouts % 60 ) == 0 ) {
++					common->Printf( "xr3d: window not vending images (%s; %d bounded acquire "
++							"timeout(s)) — frame dropped, engine keeps running\n",
++							vk3dWindowGrace ? "after the panel" : "Metal view hidden",
++							vk3dAcquireTimeouts );
++				}
++				return false;
 +			}
-+			return false;
++			if ( vk3dWindowGrace && ( res == VK_SUCCESS || res == VK_SUBOPTIMAL_KHR ) ) {
++				vk3dWindowGrace = false;
++				common->Printf( "xr3d: 2D window live again (first acquire after the panel; "
++						"%d timeout(s) on the way)\n", vk3dAcquireTimeouts );
++			}
 +		}
-+		if ( vk3dWindowGrace && ( res == VK_SUCCESS || res == VK_SUBOPTIMAL_KHR ) ) {
-+			vk3dWindowGrace = false;
-+			common->Printf( "xr3d: 2D window live again (first acquire after the panel; "
-+					"%d timeout(s) on the way)\n", vk3dAcquireTimeouts );
++#endif
+ 		if ( res == VK_TIMEOUT || res == VK_NOT_READY ) {
+ 			R_DisplayPresentationFailed( RDP_ACQUIRE_FAILED, (int32_t)res );
+ 			return false;
+@@ -4137,9 +6539,25 @@
+ 			else R_DisplayPresentationFailed( RDP_ACQUIRE_FAILED, (int32_t)res );
+ 			return false;
+ 		}
++		if ( speeds ) {
++			const double acquireEnd = Sys_GetClockTicks();
++			VK_Speeds_Add( vkSpeeds.acquire, stageStart, acquireEnd );
++			// everything from here to the submit is command recording
++			vkSpeeds.recordStartTicks = acquireEnd;
 +		}
++	} else if ( speeds && !skipAcquire ) {
++		// an offscreen (hidden-window) frame: recording starts now
++		vkSpeeds.recordStartTicks = Sys_GetClockTicks();
+ 	}
+-	const VkImage frameImage = presentable ? vkCtx.swapchainImages[ imageIndex ] : vkCtx.offscreenImages[ slot ];
+-	const VkImageView frameImageView = presentable ? vkCtx.swapchainViews[ imageIndex ] : vkCtx.offscreenViews[ slot ];
++	VkImage frameImage = presentable ? vkCtx.swapchainImages[ imageIndex ] : vkCtx.offscreenImages[ slot ];
++	VkImageView frameImageView = presentable ? vkCtx.swapchainViews[ imageIndex ] : vkCtx.offscreenViews[ slot ];
++#if defined( OPENQ4_VISIONOS_3D )
++	if ( vk3dActive ) {
++		// imageIndex is the eye image's index in vk3dPairs, not a swapchain one
++		frameImage = VK3D_EYE_OF( imageIndex ).image;
++		frameImageView = VK3D_EYE_OF( imageIndex ).view;
 +	}
 +#endif
-+	if ( speeds ) {
-+		const double acquireEnd = Sys_GetClockTicks();
-+		VK_Speeds_Add( vkSpeeds.acquire, stageStart, acquireEnd );
-+		// everything from here to the submit is command recording
-+		vkSpeeds.recordStartTicks = acquireEnd;
-+	}
- 	if ( res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR ) {
- 		return false;
- 	}
-+	}
  
  	VkCommandBuffer cmd = vkCtx.commandBuffers[ slot ];
  	VkCommandBufferBeginInfo cbbi;
-@@ -3283,6 +5691,7 @@
+@@ -4165,6 +6583,7 @@
  	// The slot fence above is the sole retirement wait. Timestamp results are
  	// polled here without VK_QUERY_RESULT_WAIT_BIT before this slot is reset.
  	VK_GpuFrameTiming_BeginFrame( cmd, slot, tr.frameCount );
@@ -3430,16 +3728,7 @@
  
  	VkImageMemoryBarrier2 toAttachment[ 2 ];
  	memset( toAttachment, 0, sizeof( toAttachment ) );
-@@ -3292,7 +5701,7 @@
- 	toAttachment[ 0 ].dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
- 	toAttachment[ 0 ].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
- 	toAttachment[ 0 ].newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
--	toAttachment[ 0 ].image = vkCtx.swapchainImages[ imageIndex ];
-+	toAttachment[ 0 ].image = VK3D_TARGET_IMAGE( imageIndex );
- 	toAttachment[ 0 ].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
- 	toAttachment[ 0 ].subresourceRange.levelCount = 1;
- 	toAttachment[ 0 ].subresourceRange.layerCount = 1;
-@@ -3302,7 +5711,7 @@
+@@ -4184,7 +6603,7 @@
  	toAttachment[ 1 ].dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
  	toAttachment[ 1 ].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
  	toAttachment[ 1 ].newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
@@ -3448,18 +3737,31 @@
  	toAttachment[ 1 ].subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
  	toAttachment[ 1 ].subresourceRange.levelCount = 1;
  	toAttachment[ 1 ].subresourceRange.layerCount = 1;
-@@ -3319,12 +5728,29 @@
+@@ -4199,7 +6618,12 @@
+ 	vkExec.swapImageIndex = imageIndex;
+ 	vkExec.frameImage = frameImage;
+ 	vkExec.frameImageView = frameImageView;
++#if defined( OPENQ4_VISIONOS_3D )
++	// a 3D frame's eye image goes to the compositor, never to the swapchain
++	vkExec.framePresentable = presentable && !vk3dActive;
++#else
+ 	vkExec.framePresentable = presentable;
++#endif
+ 	vkExec.cmd = cmd;
  	vkExec.activeRenderTexture = NULL;
- 	vkExec.activeColorEntry = NULL;
+ 	vkExec.activeCubeFace = 0;
+@@ -4207,14 +6631,31 @@
  	vkExec.activeDepthEntry = NULL;
+ 	memset( vkExec.activeColorAttachmentViews, 0, sizeof( vkExec.activeColorAttachmentViews ) );
+ 	vkExec.activeColorAttachmentViews[ 0 ] = frameImageView;
 -	vkExec.activeDepthAttachmentView = vkCtx.depthViews[ slot ];
 -	vkExec.activeExtent = vkCtx.swapchainExtent;
 +	vkExec.activeDepthAttachmentView = VK3D_DEPTH_VIEW( slot );
 +	vkExec.activeExtent = VK3D_FRAME_EXTENT;
  	vkExec.activePipelineTarget = VK_Exec_SwapchainPipelineTarget();
  	vkExec.frameOpen = true;
- 	vkExec.acquireWaitPending = true;
--	VK_Exec_BeginMainRendering( true );
+ 	// An offscreen frame acquired nothing, so its submission waits on nothing.
+ 	vkExec.acquireWaitPending = presentable;
 +#if defined( OPENQ4_VISIONOS_3D )
 +	if ( vk3dActive ) {
 +		// Nothing signalled the acquire semaphore this frame; waiting on it
@@ -3467,6 +3769,8 @@
 +		vkExec.acquireWaitPending = false;
 +	}
 +#endif
+ 	vkExec.displayColorMapped = false;
+-	VK_Exec_BeginMainRendering( true );
 +	vkExec.numFrameTargets = 0;
 +	vkExec.mainScopeDeferred = false;
 +	vkExec.swapchainScopeRecorded = false;
@@ -3481,26 +3785,17 @@
  
  	vkExec.vertexRings[ slot ].cursor = 0;
  	vkExec.indexRings[ slot ].cursor = 0;
-@@ -3369,7 +5795,7 @@
- 	barriers[ 0 ].newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
- 	barriers[ 0 ].image = vkExec.activeColorEntry != NULL
- 			? vkExec.activeColorEntry->image
--			: vkCtx.swapchainImages[ vkExec.swapImageIndex ];
-+			: VK3D_TARGET_IMAGE( vkExec.swapImageIndex );
- 	barriers[ 0 ].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
- 	barriers[ 0 ].subresourceRange.levelCount = 1;
- 	barriers[ 0 ].subresourceRange.layerCount = 1;
-@@ -3390,7 +5816,7 @@
- 			VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
- 	barriers[ 1 ].image = vkExec.activeDepthEntry != NULL
- 			? vkExec.activeDepthEntry->image
--			: vkCtx.depthImages[ vkExec.frameSlot ];
-+			: VK3D_DEPTH_IMAGE( vkExec.frameSlot );
- 	barriers[ 1 ].subresourceRange.aspectMask =
- 			vkExec.activeDepthEntry != NULL
- 			? vkExec.activeDepthEntry->aspectMask
-@@ -3407,12 +5833,72 @@
- 	vkCmdPipelineBarrier2( vkExec.cmd, &dependency );
+@@ -4274,7 +6715,7 @@
+ 		barrier.dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+ 		barrier.oldLayout = barrier.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+ 		barrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+-		barrier.image = entry != NULL ? entry->image : vkCtx.depthImages[ vkExec.frameSlot ];
++		barrier.image = entry != NULL ? entry->image : VK3D_DEPTH_IMAGE( vkExec.frameSlot );
+ 		barrier.subresourceRange.aspectMask = entry != NULL ? entry->aspectMask
+ 				: VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+ 		barrier.subresourceRange.baseArrayLayer = entry != NULL && entry->isCube ? (uint32_t)vkExec.activeCubeFace : 0;
+@@ -4294,12 +6735,78 @@
+ 	}
  }
  
 +/*
@@ -3526,9 +3821,15 @@
 +====================
 +*/
 +static bool VK_Exec_NoteTargetFirstUse( void ) {
-+	const VkImage image = vkExec.activeColorEntry != NULL
-+			? vkExec.activeColorEntry->image
-+			: VK3D_TARGET_IMAGE( vkExec.swapImageIndex );
++	// Single-attachment targets only. A multi-attachment target (upstream
++	// v0.14's MRT scopes) keeps upstream's LOAD: one image's first use says
++	// nothing about the others. vkExec.frameImage is the eye image in 3D.
++	if ( vkExec.activePipelineTarget.colorCount != 1 ) {
++		return false;
++	}
++	const VkImage image = vkExec.activeColorEntries[ 0 ] != NULL
++			? vkExec.activeColorEntries[ 0 ]->image
++			: ( vkExec.activeRenderTexture == NULL ? vkExec.frameImage : VK_NULL_HANDLE );
 +	if ( image == VK_NULL_HANDLE ) {
 +		return false;
 +	}
@@ -3573,19 +3874,16 @@
  		// Dynamic-rendering scopes do not provide implicit external
  		// dependencies. Make the previous stores visible to LOAD before a
  		// scope resumes, including when the layout itself did not change.
-@@ -3424,9 +5910,9 @@
- 	color.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
- 	color.imageView = vkExec.activeColorEntry != NULL
- 			? vkExec.activeColorEntry->attachmentView
--			: vkCtx.swapchainViews[ vkExec.swapImageIndex ];
-+			: VK3D_TARGET_VIEW( vkExec.swapImageIndex );
- 	color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
--	color.loadOp = clearColorDepth ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
-+	color.loadOp = clearTarget ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
- 	color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
- 	color.clearValue.color.float32[ 0 ] = vkExec.clearColor[ 0 ];
- 	color.clearValue.color.float32[ 1 ] = vkExec.clearColor[ 1 ];
-@@ -3440,12 +5926,20 @@
+@@ -4312,7 +6819,7 @@
+ 		color.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+ 		color.imageView = vkExec.activeColorAttachmentViews[ i ];
+ 		color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+-		color.loadOp = clearColorDepth ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
++		color.loadOp = clearTarget ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+ 		color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+ 		memcpy( color.clearValue.color.float32, vkExec.clearColor, sizeof( vkExec.clearColor ) );
+ 	}
+@@ -4324,12 +6831,20 @@
  	depth.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
  	depth.imageView = vkExec.activeDepthAttachmentView;
  	depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
@@ -3607,7 +3905,7 @@
  	depth.clearValue.depthStencil.depth = 1.0f;
  	depth.clearValue.depthStencil.stencil = 128;
  
-@@ -3462,6 +5956,7 @@
+@@ -4346,6 +6861,7 @@
  			ri.pStencilAttachment = &depth;
  		}
  	}
@@ -3615,11 +3913,11 @@
  	vkCmdBeginRendering( cmd, &ri );
  
  	// baseline dynamic state: 2D semantics (depth/cull off); the world
-@@ -3490,17 +5985,89 @@
+@@ -4374,15 +6890,90 @@
  	vkCmdSetStencilReference( cmd, VK_STENCIL_FACE_FRONT_AND_BACK, 128 );
  
  	vkExec.mainScopeOpen = true;
-+	if ( vkExec.activeColorEntry == NULL ) {
++	if ( vkExec.activeRenderTexture == NULL ) {
 +		// a scope on the swapchain image itself: the frame-end fallback is not
 +		// needed (D-077)
 +		vkExec.swapchainScopeRecorded = true;
@@ -3662,8 +3960,8 @@
 +	}
 +	vkExec.mainScopeDeferred = true;
 +	return true;
- }
- 
++}
++
 +void VK_Exec_EnsureMainScope( void ) {
 +	if ( vkExec.mainScopeDeferred ) {
 +		VK_Exec_BeginMainRendering( false );
@@ -3690,7 +3988,10 @@
 +	}
 +	VK_Exec_EndMainRendering();		// drop an armed-but-never-opened scope
 +	vkExec.activeRenderTexture = NULL;
-+	vkExec.activeColorEntry = NULL;
++	vkExec.activeCubeFace = 0;
++	memset( vkExec.activeColorEntries, 0, sizeof( vkExec.activeColorEntries ) );
++	memset( vkExec.activeColorAttachmentViews, 0, sizeof( vkExec.activeColorAttachmentViews ) );
++	vkExec.activeColorAttachmentViews[ 0 ] = vkExec.frameImageView;
 +	vkExec.activeDepthEntry = NULL;
 +	vkExec.activeDepthAttachmentView = VK3D_DEPTH_VIEW( vkExec.frameSlot );
 +	vkExec.activeExtent = VK3D_FRAME_EXTENT;
@@ -3700,21 +4001,10 @@
 +		VK_Exec_EndMainRendering();
 +	}
 +	vkGpuTimes.swapchainFallbacks++;
-+}
-+
+ }
+ 
  static void VK_Exec_LayoutAccess( VkImageLayout layout, VkPipelineStageFlags2 &stage,
- 		VkAccessFlags2 &access ) {
- 	switch ( layout ) {
-@@ -3592,7 +6159,7 @@
- 	VK_Exec_LayoutAccess( newLayout, barrier.dstStageMask, barrier.dstAccessMask );
- 	barrier.oldLayout = oldLayout;
- 	barrier.newLayout = newLayout;
--	barrier.image = vkCtx.swapchainImages[ vkExec.swapImageIndex ];
-+	barrier.image = VK3D_TARGET_IMAGE( vkExec.swapImageIndex );
- 	barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
- 	barrier.subresourceRange.levelCount = 1;
- 	barrier.subresourceRange.layerCount = 1;
-@@ -3616,7 +6183,7 @@
+@@ -4506,7 +7097,7 @@
  	VK_Exec_LayoutAccess( newLayout, barrier.dstStageMask, barrier.dstAccessMask );
  	barrier.oldLayout = oldLayout;
  	barrier.newLayout = newLayout;
@@ -3723,10 +4013,24 @@
  	barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
  	barrier.subresourceRange.levelCount = 1;
  	barrier.subresourceRange.layerCount = 1;
-@@ -3682,9 +6249,9 @@
- 		return false;
+@@ -4570,10 +7161,11 @@
+ 			return false;
+ 		}
+ 	} else {
++		// vkExec.frameImageView is the eye image in a 3D frame (BeginFrame)
+ 		attachments.colorCount = 1;
+ 		attachments.colorViews[ 0 ] = vkExec.frameImageView;
+-		attachments.depthView = vkCtx.depthViews[ vkExec.frameSlot ];
+-		attachments.extent = vkCtx.swapchainExtent;
++		attachments.depthView = VK3D_DEPTH_VIEW( vkExec.frameSlot );
++		attachments.extent = VK3D_FRAME_EXTENT;
+ 		attachments.samples = VK_SAMPLE_COUNT_1_BIT;
  	}
- 	if ( renderTexture == vkExec.activeRenderTexture ) {
+ 	// A target object can gain attachments or have its images reallocated
+@@ -4583,13 +7175,14 @@
+ 			&& memcmp( attachments.colorViews, vkExec.activeColorAttachmentViews,
+ 					sizeof( attachments.colorViews ) ) == 0
+ 			&& attachments.depthView == vkExec.activeDepthAttachmentView ) {
 -		if ( !vkExec.mainScopeOpen ) {
 +		if ( !vkExec.mainScopeOpen && !vkExec.mainScopeDeferred ) {
  			VK_Exec_TransitionActiveTargetToAttachments();
@@ -3735,21 +4039,16 @@
  		}
  		return true;
  	}
-@@ -3695,6 +6262,7 @@
- 		return false;
- 	}
  
 +	VK_GpuTimes_NoteScopeEnd( "SetRenderTarget" );
  	VK_Exec_EndMainRendering();
  	VK_Exec_TransitionActiveTargetToSampled();
  
-@@ -3713,19 +6281,19 @@
- 				? depthEntry->format : VK_FORMAT_UNDEFINED;
- 		vkExec.activePipelineTarget.samples = colorEntry->samples;
+@@ -4615,18 +7208,18 @@
+ 		vkExec.activePipelineTarget.samples = attachments.samples;
+ 		VK_Exec_TransitionActiveTargetToAttachments();
  	} else {
--		vkExec.activeDepthAttachmentView = vkCtx.depthViews[ vkExec.frameSlot ];
 -		vkExec.activeExtent = vkCtx.swapchainExtent;
-+		vkExec.activeDepthAttachmentView = VK3D_DEPTH_VIEW( vkExec.frameSlot );
 +		vkExec.activeExtent = VK3D_FRAME_EXTENT;
  		vkExec.activePipelineTarget = VK_Exec_SwapchainPipelineTarget();
  	}
@@ -3767,8 +4066,8 @@
 +	return vkExec.frameOpen ? (int)vkExec.activeExtent.height : (int)VK3D_FRAME_EXTENT.height;
  }
  
- // Is the dynamic-rendering scope actually recording? VK_Exec_ActiveCmd only
-@@ -3767,6 +6335,7 @@
+ // A target bind does not write pixels. Record row provenance at the writer,
+@@ -4686,6 +7279,7 @@
  	if ( !VK_GuiExecutor_BeginFrame() ) {
  		return;
  	}
@@ -3776,7 +4075,7 @@
  	if ( !vkExec.mainScopeOpen && !VK_Exec_BeginMainRendering( false ) ) {
  		return;
  	}
-@@ -4743,9 +7312,12 @@
+@@ -5747,9 +8341,12 @@
  
  bool VK_Exec_CopyRender( idImage *image, int x, int y, int width, int height,
  		int cubeFace, bool copyDepth ) {
@@ -3791,35 +4090,34 @@
  	const idImageOpts &imageOpts = image->GetOpts();
  	const bool targetIsCube = imageOpts.textureType == TT_CUBIC;
  	if ( ( imageOpts.textureType != TT_2D && !targetIsCube )
-@@ -4765,18 +7337,23 @@
- 	vkImageEntry_t *sourceEntry = NULL;
+@@ -5770,14 +8367,14 @@
  	if ( copyDepth ) {
  		sourceEntry = vkExec.activeRenderTexture != NULL ? vkExec.activeDepthEntry : NULL;
+ 		if ( vkExec.activeRenderTexture != NULL && sourceEntry == NULL ) {
+-			return false;
++			return VK_Feedback_CopyFailed( VKFB_SOURCE_UNUSABLE );
+ 		}
 -		sourceImage = sourceEntry != NULL ? sourceEntry->image : vkCtx.depthImages[ vkExec.frameSlot ];
 +		sourceImage = sourceEntry != NULL ? sourceEntry->image : VK3D_DEPTH_IMAGE( vkExec.frameSlot );
  		sourceFormat = sourceEntry != NULL ? sourceEntry->format : vkCtx.depthFormat;
  	} else {
- 		sourceEntry = vkExec.activeRenderTexture != NULL ? vkExec.activeColorEntry : NULL;
--		sourceImage = sourceEntry != NULL ? sourceEntry->image : vkCtx.swapchainImages[ vkExec.swapImageIndex ];
-+		sourceImage = sourceEntry != NULL ? sourceEntry->image : VK3D_TARGET_IMAGE( vkExec.swapImageIndex );
+ 		sourceEntry = vkExec.activeRenderTexture != NULL ? vkExec.activeColorEntries[ 0 ] : NULL;
+ 		if ( vkExec.activeRenderTexture != NULL && sourceEntry == NULL ) {
+-			return false;
++			return VK_Feedback_CopyFailed( VKFB_SOURCE_UNUSABLE );
+ 		}
+ 		sourceImage = sourceEntry != NULL ? sourceEntry->image : vkExec.frameImage;
  		sourceFormat = sourceEntry != NULL ? sourceEntry->format : vkCtx.swapchainFormat;
- 	}
- 	if ( sourceImage == VK_NULL_HANDLE
+@@ -5796,7 +8393,7 @@
  			|| ( sourceEntry == NULL && !copyDepth && !vkCtx.swapchainTransferSrc )
  			|| ( sourceEntry != NULL && ( sourceEntry->usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT ) == 0 )
--			|| ( sourceEntry != NULL && sourceEntry->samples != VK_SAMPLE_COUNT_1_BIT ) ) {
+ 			|| ( resolveDepthSource && VK_Exec_DepthResolveMode() == VK_RESOLVE_MODE_NONE ) ) {
 -		return false;
-+			|| ( sourceEntry != NULL && sourceEntry->samples != VK_SAMPLE_COUNT_1_BIT
-+				&& copyDepth ) ) {
-+		// A multisampled COLOUR source is resolved below; a multisampled depth
-+		// source is not (that needs VK_KHR_depth_stencil_resolve inside a
-+		// render pass, and nothing in the retail data captures depth from an
-+		// MSAA target today). D-094.
 +		return VK_Feedback_CopyFailed( VKFB_SOURCE_UNUSABLE );
  	}
  
  	const int sourceWidth = VK_Exec_ActiveFramebufferWidth();
-@@ -4796,21 +7373,21 @@
+@@ -5818,21 +8415,21 @@
  		height = sourceHeight - y;
  	}
  	if ( width <= 0 || height <= 0 ) {
@@ -3845,7 +4143,7 @@
  	}
  	if ( destination == NULL || destination->image == sourceImage
  			|| destination->samples != VK_SAMPLE_COUNT_1_BIT
-@@ -4818,17 +7395,23 @@
+@@ -5840,9 +8437,10 @@
  			|| ( copyDepth && destination->format != sourceFormat )
  			|| destination->isCube != targetIsCube
  			|| destination->numLayers != ( targetIsCube ? 6 : 1 ) ) {
@@ -3855,8 +4153,9 @@
  
 +	VK_GpuTimes_NoteScopeEnd( "CopyRender" );
  	VK_Exec_EndMainRendering();
- 	if ( sourceEntry != NULL ) {
- 		VK_Exec_TransitionImage( sourceEntry, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL );
+ 	if ( resolveDepthSource ) {
+ 		// stays a depth attachment; the resolve pass reads it as one
+@@ -5851,8 +8449,13 @@
  	} else if ( !copyDepth ) {
  		if ( !vkCtx.swapchainTransferSrc ) {
  			VK_Exec_BeginMainRendering( false );
@@ -3871,53 +4170,16 @@
  		VK_Exec_TransitionSwapchain( VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
  				VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL );
  	} else {
-@@ -4837,6 +7420,45 @@
- 	}
- 	VK_Exec_TransitionImage( destination, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL );
- 
-+	// With r_multiSamples on, the scene target is multisampled and
-+	// vkCmdBlitImage refuses it outright. Upstream simply failed the capture
-+	// here, and VK_GuiExecutor_Draw3DView then skipped every
-+	// _currentRender-consuming surface -- which silently deleted the heat haze
-+	// from every effects/fire/*.fx, the warp_mask stages and the fire
-+	// distortion, on every MSAA frame (D-093/D-094). Resolve into single-sample
-+	// scratch of the source's own format first; the format-converting,
-+	// Y-flipping blit below then runs exactly as it does at one sample (a
-+	// resolve cannot flip or convert, so both steps are needed).
-+	VkImage blitSource = sourceImage;
-+	if ( !copyDepth && sourceEntry != NULL
-+			&& sourceEntry->samples != VK_SAMPLE_COUNT_1_BIT ) {
-+		vkImageEntry_t *scratch = VK_Image_AcquireResolveScratch( sourceWidth,
-+				sourceHeight, sourceFormat );
-+		if ( scratch == NULL ) {
-+			VK_Exec_TransitionImage( destination, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL );
-+			VK_Exec_TransitionImage( sourceEntry, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL );
-+			VK_Exec_BeginMainRendering( false );
+@@ -5878,7 +8481,7 @@
+ 			VK_Exec_TransitionImage( destination, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL );
+ 			VK_Exec_TransitionImage( sourceEntry, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL );
+ 			VK_Exec_BeginMainRendering( false );
+-			return false;
 +			return VK_Feedback_CopyFailed( VKFB_RESOLVE_SCRATCH );
-+		}
-+		VK_Exec_TransitionImage( scratch, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL );
-+
-+		VkImageResolve resolveRegion;
-+		memset( &resolveRegion, 0, sizeof( resolveRegion ) );
-+		resolveRegion.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-+		resolveRegion.srcSubresource.layerCount = 1;
-+		resolveRegion.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-+		resolveRegion.dstSubresource.layerCount = 1;
-+		resolveRegion.extent.width = (uint32_t)sourceWidth;
-+		resolveRegion.extent.height = (uint32_t)sourceHeight;
-+		resolveRegion.extent.depth = 1;
-+		vkCmdResolveImage( vkExec.cmd, sourceImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-+				scratch->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &resolveRegion );
-+
-+		scratch->everUploaded = true;
-+		VK_Exec_TransitionImage( scratch, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL );
-+		blitSource = scratch->image;
-+	}
-+
- 	if ( copyDepth ) {
- 		if ( VK_Exec_DepthBlitSupported( sourceFormat ) ) {
- 			// One flipped NEAREST blit reproduces the per-row copy's GL
-@@ -4874,7 +7496,7 @@
+ 		}
+ 		VK_Exec_TransitionImage( scratch, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL );
+ 
+@@ -5955,7 +8558,7 @@
  							VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL );
  				}
  				VK_Exec_BeginMainRendering( false );
@@ -3926,16 +4188,7 @@
  			}
  			memset( rows, 0, height * sizeof( VkImageCopy ) );
  			for ( int row = 0; row < height; row++ ) {
-@@ -4924,7 +7546,7 @@
- 	region.dstOffsets[ 1 ].x = width;
- 	region.dstOffsets[ 1 ].y = height;
- 	region.dstOffsets[ 1 ].z = 1;
--	vkCmdBlitImage( vkExec.cmd, sourceImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-+	vkCmdBlitImage( vkExec.cmd, blitSource, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
- 			destination->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region, VK_FILTER_NEAREST );
- 
- 	destination->everUploaded = true;
-@@ -5033,15 +7655,16 @@
+@@ -6118,15 +8721,16 @@
  	return false;
  }
  
@@ -3955,7 +4208,7 @@
  	}
  	idImage *sceneImage = globalImages->currentRenderImage;
  	if ( backEnd.renderTexture != NULL && backEnd.renderTexture->GetNumColorImages() > 0
-@@ -5051,25 +7674,26 @@
+@@ -6136,25 +8740,26 @@
  			warnedColorAlias = true;
  			common->Warning( "Vulkan: refusing _currentRender feedback from the active color attachment" );
  		}
@@ -3987,7 +4240,7 @@
  	}
  	idImage *depthImage = globalImages->currentDepthImage;
  	if ( backEnd.renderTexture != NULL
-@@ -5079,16 +7703,45 @@
+@@ -6164,16 +8769,45 @@
  			warnedDepthAlias = true;
  			common->Warning( "Vulkan: refusing _currentDepth feedback from the active depth attachment" );
  		}
@@ -4035,7 +4288,7 @@
  static VkResolveModeFlagBits VK_Exec_DepthResolveMode( void ) {
  	VkPhysicalDeviceDepthStencilResolveProperties resolveProperties;
  	memset( &resolveProperties, 0, sizeof( resolveProperties ) );
-@@ -5247,6 +7900,7 @@
+@@ -6351,6 +8985,7 @@
  		renderingInfo.renderArea.extent.height = height;
  		renderingInfo.layerCount = 1;
  		renderingInfo.pDepthAttachment = &depthAttachment;
@@ -4043,15 +4296,15 @@
  		vkCmdBeginRendering( vkExec.cmd, &renderingInfo );
  		vkCmdEndRendering( vkExec.cmd );
  
-@@ -5295,6 +7949,7 @@
+@@ -6724,6 +9359,7 @@
+ 		}
+ 	}
  
- 	const uint32_t width = (uint32_t)Min( sourceColor->width, destinationColor->width );
- 	const uint32_t height = (uint32_t)Min( sourceColor->height, destinationColor->height );
 +	VK_GpuTimes_NoteScopeEnd( "ResolveRenderTargets" );
  	VK_Exec_EndMainRendering();
- 	VK_Exec_TransitionImage( sourceColor, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL );
- 	VK_Exec_TransitionImage( destinationColor, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL );
-@@ -5360,7 +8015,16 @@
+ 	for ( uint32_t i = 0; i < source.colorCount; i++ ) {
+ 		vkImageEntry_t *sourceColor = source.colors[ i ];
+@@ -6798,7 +9434,16 @@
  	}
  
  	VK_Exec_TransitionActiveTargetToAttachments();
@@ -4069,7 +4322,26 @@
  	return depthResolved;
  }
  
-@@ -5378,8 +8042,8 @@
+@@ -6843,8 +9488,18 @@
+ 	const float gamma = Max( r_gamma.GetFloat(), 0.001f );
+ 	if ( vkExec.displayColorMapped || ( idMath::Fabs( brightness - 1.0f ) <= 0.0001f
+ 			&& idMath::Fabs( gamma - 1.0f ) <= 0.0001f ) ) {
++		return true;
++	}
++#if defined( OPENQ4_VISIONOS_3D )
++	if ( vk3dActive ) {
++		// openQ4-ios (D-116): this pass is new in v0.14 and is written for the
++		// swapchain -- its extent, its format, its transfer-source usage. A 3D
++		// frame's target is an eye image of the panel's size, sampled by the
++		// compositor. Keep v0.13.2's behaviour there (no display mapping in 3D)
++		// rather than copy a swapchain-sized rectangle out of an eye image.
+ 		return true;
+ 	}
++#endif
+ 	if ( !vkExec.frameOpen || !vkCtx.swapchainTransferSrc ) {
+ 		return VK_DisplayColorMapping_Failed( "swapchain copy unavailable" );
+ 	}
+@@ -6942,8 +9597,8 @@
  		return false;
  	}
  
@@ -4080,7 +4352,7 @@
  	if ( x < 0 ) {
  		width += x;
  		x = 0;
-@@ -5429,7 +8093,14 @@
+@@ -6996,7 +9651,14 @@
  		return false;
  	}
  
@@ -4095,30 +4367,23 @@
  	VK_Exec_TransitionSwapchain( VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
  			VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL );
  
-@@ -5442,7 +8113,7 @@
- 	copy.imageExtent.width = (uint32_t)width;
- 	copy.imageExtent.height = (uint32_t)height;
- 	copy.imageExtent.depth = 1;
--	vkCmdCopyImageToBuffer( vkExec.cmd, vkCtx.swapchainImages[ vkExec.swapImageIndex ],
-+	vkCmdCopyImageToBuffer( vkExec.cmd, VK3D_TARGET_IMAGE( vkExec.swapImageIndex ),
- 			VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readbackBuffer, 1, &copy );
- 
- 	VK_Exec_TransitionSwapchain( VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-@@ -5527,9 +8198,34 @@
- 	// them execute before this frame samples the images, and this frame's fence
- 	// then covers them for deferred-destroy retirement
- 	VK_Device_FlushUploadBatch();
+@@ -7119,10 +9781,36 @@
+ 		VK_GpuFrameTiming_SubmitFailed( slot );
+ 		vkExec.acquireWaitPending = false; vkExec.frameOpen = false;
+ 		return false;
++	}
 +	bool clearFallback = present;
 +#if defined( OPENQ4_VISIONOS_3D )
 +	if ( vk3dActive ) {
 +		// 3D submits without presenting: there is no acquired swapchain image
-+		// and no presentation engine in this path at all. The compositor
++		// and no presentation engine in this path at all (BeginFrame left
++		// framePresentable false, so presentImage is false too). The compositor
 +		// thread samples the image the submit just filled.
 +		present = false;
 +		// ...but the frame still needs a defined target, exactly as a
 +		// presented one does (D-077).
 +		clearFallback = true;
-+	}
+ 	}
 +#endif
  
 +	VK_GpuTimes_NoteScopeEnd( "EndFrame" );
@@ -4137,17 +4402,17 @@
 +	}
 +#endif
  
- 	if ( present ) {
+ 	if ( presentImage ) {
  		VkImageMemoryBarrier2 toPresent;
-@@ -5553,6 +8249,7 @@
+@@ -7146,6 +9834,7 @@
  	}
  
  	VK_GpuFrameTiming_EndFrame( cmd, slot );
 +	VK_GpuTimes_EndFrame( cmd );
- 	vkEndCommandBuffer( cmd );
- 
- 	// Flush each ring's host-written prefix once, before the queue submit that
-@@ -5581,7 +8278,10 @@
+ 	const VkResult ended = vkEndCommandBuffer( cmd );
+ 	if ( ended != VK_SUCCESS ) {
+ 		VK_GpuFrameTiming_SubmitFailed( slot );
+@@ -7183,7 +9872,10 @@
  	VkSemaphoreSubmitInfo signalInfo;
  	memset( &signalInfo, 0, sizeof( signalInfo ) );
  	signalInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
@@ -4155,14 +4420,14 @@
 +	// Only meaningful when presenting — and in 3D `imageIndex` is a present-image
 +	// index, not a swapchain one, so indexing this array with it would be wrong
 +	// as well as pointless.
-+	signalInfo.semaphore = present ? vkCtx.renderFinishedSemaphores[ imageIndex ] : VK_NULL_HANDLE;
++	signalInfo.semaphore = presentImage ? vkCtx.renderFinishedSemaphores[ imageIndex ] : VK_NULL_HANDLE;
  	signalInfo.stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
  	VkCommandBufferSubmitInfo cmdInfo;
  	memset( &cmdInfo, 0, sizeof( cmdInfo ) );
-@@ -5596,6 +8296,16 @@
+@@ -7198,6 +9890,16 @@
  	si.pCommandBufferInfos = &cmdInfo;
- 	si.signalSemaphoreInfoCount = present ? 1 : 0;
- 	si.pSignalSemaphoreInfos = present ? &signalInfo : NULL;
+ 	si.signalSemaphoreInfoCount = presentImage ? 1 : 0;
+ 	si.pSignalSemaphoreInfos = presentImage ? &signalInfo : NULL;
 +	const bool speeds = VK_Speeds_Enabled();
 +	double stageStart = 0.0;
 +	if ( speeds ) {
@@ -4173,17 +4438,18 @@
 +	// MoltenVK encodes the Metal command buffer inside this call unless
 +	// MVK_CONFIG_SYNCHRONOUS_QUEUE_SUBMITS is turned off, so it is a real
 +	// stage rather than a handle handoff.
- 	if ( vkQueueSubmit2( vkCtx.graphicsQueue, 1, &si, vkCtx.frameFences[ slot ] ) != VK_SUCCESS ) {
+ 	const VkResult submitted = vkQueueSubmit2( vkCtx.graphicsQueue, 1, &si, vkCtx.frameFences[ slot ] );
+ 	if ( submitted != VK_SUCCESS ) {
  		VK_GpuFrameTiming_SubmitFailed( slot );
- 		// The slot fence was reset in BeginFrame; a failed submit never signals
-@@ -5620,8 +8330,29 @@
- 		common->Warning( "Vulkan: frame submit failed on slot %d; recovered frame state", slot );
+@@ -7210,9 +9912,33 @@
+ 		VK_Device_BlockPresentation( RDP_SUBMIT_FAILED, submitted, "frame submit" );
  		return false;
  	}
 +	if ( speeds ) {
 +		VK_Speeds_Add( vkSpeeds.submit, stageStart, Sys_GetClockTicks() );
 +	}
 +	VK_GpuTimes_NoteSubmitted();
+ 	R_DisplayPresentationSubmitted();
  	vkExec.acquireWaitPending = false;
  	vkExec.frameOpen = false;
 +#if defined( OPENQ4_VISIONOS_3D )
@@ -4201,12 +4467,15 @@
 +		vk3dPendingSerial[ slot ] = vk3dBeginCount;
 +		vk3dSubmitted++;
 +		vk3dEyeRenders[ vk3dPendingEye[ slot ] ]++;
++		// The compositor presents it; for upstream's presentation bookkeeping
++		// this frame is as presented as a hidden window's (D-116).
++		R_DisplayPresentationPresented();
 +	}
 +#endif
  	if ( !present ) {
  		return true;
  	}
-@@ -5634,9 +8365,14 @@
+@@ -7231,7 +9957,11 @@
  	pi.swapchainCount = 1;
  	pi.pSwapchains = &vkCtx.swapchain;
  	pi.pImageIndices = &imageIndex;
@@ -4215,18 +4484,30 @@
 +	if ( speeds ) {
 +		VK_Speeds_Add( vkSpeeds.present, stageStart, Sys_GetClockTicks() );
 +	}
- 	if ( res == VK_ERROR_OUT_OF_DATE_KHR || res == VK_SUBOPTIMAL_KHR ) {
--		VK_Device_RecreateSwapchain();
-+		VK_Device_RecreateSwapchainForReason( res == VK_SUBOPTIMAL_KHR
-+				? VK_RECREATE_PRESENT_SUBOPTIMAL : VK_RECREATE_PRESENT_OUT_OF_DATE );
+ 	if ( res == VK_SUCCESS || res == VK_SUBOPTIMAL_KHR ) R_DisplayPresentationPresented();
+ 	else if ( res == VK_ERROR_OUT_OF_DATE_KHR || res == VK_ERROR_SURFACE_LOST_KHR ) R_DisplayPresentationFailed( RDP_PRESENT_FAILED, (int32_t)res );
+ 	else { VK_Device_BlockPresentation( RDP_PRESENT_FAILED, res, "frame present" ); return false; }
+@@ -7241,11 +9971,14 @@
+ 	if ( res == VK_ERROR_SURFACE_LOST_KHR ) {
+ 		(void)VK_Device_RecoverSurface();
+ 	} else if ( res == VK_ERROR_OUT_OF_DATE_KHR ) {
+-		(void)VK_Device_RecreateSwapchain();
++		(void)VK_Device_RecreateSwapchainForReason( VK_RECREATE_PRESENT_OUT_OF_DATE );
+ 	} else if ( res == VK_SUBOPTIMAL_KHR && VK_Device_SurfaceExtentChanged() ) {
+ 		// Some surfaces stay suboptimal at the current size (scaling, rotation);
+ 		// recreating every frame for that would idle the device per frame.
+-		(void)VK_Device_RecreateSwapchain();
++		// openQ4-ios: a render-scaled swapchain is deliberately smaller than the
++		// surface, so the extent always "changed" -- the reason-tagged recreate
++		// lets 0021's thrash limiter stop that after the first futile rebuild.
++		(void)VK_Device_RecreateSwapchainForReason( VK_RECREATE_PRESENT_SUBOPTIMAL );
  	}
  	return true;
  }
-@@ -6440,9 +9176,53 @@
- 		proj[ 14 ] -= space->modelDepthHack;
+@@ -8181,8 +10914,52 @@
  	} else if ( space->weaponDepthHack ) {
  		proj[ 14 ] *= 0.25f;
-+	}
+ 	}
 +#if defined( OPENQ4_VISIONOS_3D )
 +	float weaponModelView[ 16 ];
 +	const float *modelView = space->modelViewMatrix;
@@ -4266,7 +4547,7 @@
 +		const float gunConv = Max( r_stereo3dGunConvergence.GetFloat(), 1.0f );
 +		proj[ 8 ] += proj[ 0 ] * tr_stereoEyeOffset / worldConv;	// undo the world skew
 +		proj[ 8 ] -= proj[ 0 ] * eWeapon / gunConv;					// apply the weapon's
- 	}
++	}
  	float mvpGL[ 16 ];
 +	myGlMultMatrix( modelView, proj, mvpGL );
 +#else
@@ -4276,10 +4557,12 @@
  	VK_FixupClipSpaceZ( outMvp, mvpGL );
  }
  
-@@ -6458,6 +9238,37 @@
+@@ -8196,6 +10973,34 @@
+ */
+ VkCommandBuffer VK_Exec_ActiveCmd( void ) {
  	return vkExec.frameOpen ? vkExec.cmd : VK_NULL_HANDLE;
- }
- 
++}
++
 +bool VK_Exec_MainScopeOpen( void ) {
 +	return vkExec.mainScopeOpen || vkExec.mainScopeDeferred;
 +}
@@ -4292,10 +4575,7 @@
 +// pass, and the render texture's colour image carries the only human-readable
 +// name the backend has for a non-swapchain target
 +VkImageView VK_Exec_ActiveColorView( void ) {
-+	if ( vkExec.activeColorEntry != NULL ) {
-+		return vkExec.activeColorEntry->attachmentView;
-+	}
-+	return vkExec.frameOpen ? VK3D_TARGET_VIEW( vkExec.swapImageIndex ) : VK_NULL_HANDLE;
++	return vkExec.frameOpen ? vkExec.activeColorAttachmentViews[ 0 ] : VK_NULL_HANDLE;
 +}
 +
 +const char *VK_Exec_ActiveTargetName( void ) {
@@ -4304,17 +4584,15 @@
 +			&& vkExec.activeRenderTexture->GetColorImage( 0 ) != NULL ) {
 +		return vkExec.activeRenderTexture->GetColorImage( 0 )->GetName();
 +	}
-+	return vkExec.activeColorEntry != NULL ? "render-texture" : "swapchain";
++	return vkExec.activeRenderTexture != NULL ? "render-texture" : "swapchain";
 +}
 +
 +unsigned int VK_Exec_ActiveSampleCount( void ) {
 +	return (unsigned int)vkExec.activePipelineTarget.samples;
-+}
-+
+ }
+ 
  int VK_Exec_ActiveFrameSlot( void ) {
- 	return vkExec.frameSlot;
- }
-@@ -7351,6 +10162,7 @@
+@@ -9715,6 +12520,7 @@
  			VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
  			0, sizeof( push ), &push );
  	VK_Device_CountDrawIndexed( (int)( tri->numIndexes ), (int)( tri->numVerts ) );
@@ -4322,7 +4600,7 @@
  	vkCmdDrawIndexed( vkExec.cmd, (uint32_t)tri->numIndexes, 1, 0, 0, 0 );
  	return true;
  }
-@@ -7473,6 +10285,7 @@
+@@ -9837,6 +12643,7 @@
  			VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
  			0, sizeof( push ), &push );
  	VK_Device_CountDrawIndexed( (int)( tri->numIndexes ), (int)( tri->numVerts ) );
@@ -4330,7 +4608,7 @@
  	vkCmdDrawIndexed( vkExec.cmd, (uint32_t)tri->numIndexes, 1, 0, 0, 0 );
  	return true;
  }
-@@ -7975,6 +10788,7 @@
+@@ -10445,6 +13252,7 @@
  			VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
  			0, sizeof( push ), &push );
  	VK_Device_CountDrawIndexed( (int)( tri->numIndexes ), (int)( tri->numVerts ) );
@@ -4338,7 +4616,7 @@
  	vkCmdDrawIndexed( vkExec.cmd, (uint32_t)tri->numIndexes, 1, 0, 0, 0 );
  
  	static bool loggedFamily[ VK_GLSL_PROGRAM_FAMILY_COUNT ];
-@@ -8093,6 +10907,7 @@
+@@ -10564,6 +13372,7 @@
  }
  
  static bool VK_Exec_DrawRVSpecialBlur( const viewDef_t *viewDef ) {
@@ -4346,7 +4624,7 @@
  	if ( globalImages == NULL || globalImages->currentRenderImage == NULL
  			|| globalImages->currentDepthImage == NULL ) {
  		return false;
-@@ -8243,6 +11058,7 @@
+@@ -10714,6 +13523,7 @@
  }
  
  static bool VK_Exec_DrawRVSpecialAL( const viewDef_t *viewDef ) {
@@ -4354,7 +4632,7 @@
  	if ( globalImages == NULL || globalImages->currentDepthImage == NULL
  			|| tr.primaryWorld == NULL ) {
  		return false;
-@@ -8380,6 +11196,7 @@
+@@ -10851,6 +13661,7 @@
  }
  
  static void VK_Exec_DrawRVSpecialEffects( const viewDef_t *viewDef ) {
@@ -4362,7 +4640,7 @@
  	if ( viewDef == NULL || vkExec.pendingSpecialEffectsView != viewDef ) {
  		if ( viewDef != NULL && vkExec.pendingSpecialEffectsMask != 0 ) {
  			static bool warnedSpecialEffectsViewMismatch = false;
-@@ -8465,6 +11282,7 @@
+@@ -10937,6 +13748,7 @@
  	if ( !VK_Exec_SetRenderTarget( destinationRenderTexture ) ) {
  		return;
  	}
@@ -4370,7 +4648,7 @@
  	backEnd.renderTexture = destinationRenderTexture;
  	backEnd.feedbackRenderTexture = NULL;
  	vkExec.pendingSpecialEffectsNeedsResolve = false;
-@@ -8571,6 +11389,7 @@
+@@ -11222,6 +14034,7 @@
  				VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
  				0, sizeof( push ), &push );
  		VK_Device_CountDrawIndexed( (int)( tri->numIndexes ), (int)( tri->numVerts ) );
@@ -4378,7 +4656,7 @@
  		vkCmdDrawIndexed( vkExec.cmd, (uint32_t)tri->numIndexes, 1, 0, 0, 0 );
  
  		static bool loggedMonochromeProgram = false;
-@@ -8653,6 +11472,29 @@
+@@ -11304,6 +14117,29 @@
  	parms[ 3 ][ 1 ] = projection[ 4 ];
  	parms[ 3 ][ 2 ] = projection[ 8 ];
  	parms[ 3 ][ 3 ] = projection[ 12 ];
@@ -4408,7 +4686,7 @@
  	parms[ 4 ][ 0 ] = projection[ 3 ];
  	parms[ 4 ][ 1 ] = projection[ 7 ];
  	parms[ 4 ][ 2 ] = projection[ 11 ];
-@@ -8750,6 +11592,7 @@
+@@ -11401,6 +14237,7 @@
  			VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
  			0, sizeof( push ), &push );
  	VK_Device_CountDrawIndexed( (int)( tri->numIndexes ), (int)( tri->numVerts ) );
@@ -4416,7 +4694,7 @@
  	vkCmdDrawIndexed( vkExec.cmd, (uint32_t)tri->numIndexes, 1, 0, 0, 0 );
  
  	static bool loggedHeatHazeFamily[ 4 ] = { false, false, false, false };
-@@ -9175,6 +12018,7 @@
+@@ -11925,6 +14762,7 @@
  		vkCmdPushConstants( cmd, stageLayout,
  				VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof( push ), &push );
  		VK_Device_CountDrawIndexed( (int)( tri->numIndexes ), (int)( tri->numVerts ) );
@@ -4424,7 +4702,7 @@
  		vkCmdDrawIndexed( cmd, (uint32_t)tri->numIndexes, 1, 0, 0, 0 );
  
  		if ( stagePolygonOffset ) {
-@@ -10985,8 +13829,15 @@
+@@ -13763,8 +16601,15 @@
  		return;
  	}
  	VK_TemporalPresentation_ObserveHistoryAndCapture();
@@ -4437,10 +4715,10 @@
  
  	backEnd.viewDef = (viewDef_t *)viewDef;
 +	VK_GpuTimes_SplitStage( VKGPU_GUI );
+ 	VK_Exec_MarkCanonicalWrites();
  	if ( r_rendererSharedGui.GetBool() && !sharedCinematicRoot
  			&& VK_ClassicGui_DrawOwnedView( viewDef ) ) {
- 		return;
-@@ -11103,8 +13954,15 @@
+@@ -13961,8 +16806,15 @@
  			VK_CLASSIC_CINEMATIC_POST_REJECT_BEGIN_FRAME );
  		return;
  	}
@@ -4454,9 +4732,9 @@
  	backEnd.viewDef = (viewDef_t *)viewDef;
 +	VK_GpuTimes_SplitStage( VKGPU_PREPASS );
  
- 	VkCommandBuffer cmd = vkExec.cmd;
- 	const int slot = vkExec.frameSlot;
-@@ -11385,6 +14243,7 @@
+ 	// r_showOverDraw swaps the view's surface list and materials before the
+ 	// walk, as RB_DrawView does ahead of RB_STD_DrawView
+@@ -14294,6 +17146,7 @@
  	// then the ambient walks. The pass tracks its own space/depth-range
  	// state and exits at maxDepth 1.0 with depth bias off; restart the
  	// walk baseline to match.
@@ -4464,7 +4742,7 @@
  	// Seal all Vulkan resources now, after the established depth prerequisite
  	// has consumed its transient allocations but before the first interaction
  	// framebuffer write. A rejection leaves the complete classic light/shadow
-@@ -11405,6 +14264,7 @@
+@@ -14319,6 +17172,7 @@
  	if ( !r_skipInteractions.GetBool() ) {
  		VK_ShadowMap_DebugOverlayDraw( viewDef );
  	}
@@ -4472,7 +4750,7 @@
  	currentSpace = NULL;
  	weaponDepthRange = false;
  	viewport.maxDepth = 1.0f;
-@@ -11493,6 +14353,7 @@
+@@ -14445,6 +17299,7 @@
  					}
  					break;
  				}
@@ -4480,7 +4758,7 @@
  				bool feedbackReady = true;
  				if ( VK_Exec_AutomaticCaptureAllowed() ) {
  					feedbackReady = backEnd.currentRenderCopied
-@@ -11522,7 +14383,8 @@
+@@ -14474,7 +17329,8 @@
  					static bool warnedPostCapture = false;
  					if ( !warnedPostCapture ) {
  						warnedPostCapture = true;
@@ -4490,7 +4768,7 @@
  					}
  					break;
  				}
-@@ -11663,6 +14525,9 @@
+@@ -14628,6 +17484,9 @@
  	vkCmdSetCullMode( cmd, VK_CULL_MODE_NONE );
  	vkCmdSetStencilTestEnable( cmd, VK_FALSE );
  
@@ -4502,10 +4780,11 @@
  	if ( !loggedFirstWorldView ) {
 --- a/src/renderer/Vulkan/vk_Backend.cpp
 +++ b/src/renderer/Vulkan/vk_Backend.cpp
-@@ -45,6 +45,18 @@
- #include "VulkanDevice.h"
- #include "vk_Image.h"
- 
+@@ -51,7 +51,19 @@
+ #include "vk_MaterialPrograms.h"
+ #include <chrono>
+ #include <thread>
++
 +#if defined( OPENQ4_VISIONOS_3D )
 +// vk_GuiExecutor.cpp's stereo block. In 3D the frame size is the PER-EYE render
 +// size, not the window's, so the two places that copy the swapchain extent into
@@ -4516,12 +4795,12 @@
 +#else
 +#define VK3D_OWNS_SCREEN_SIZE	false
 +#endif
-+
+ 
 +
  // the back-end state object normally defined by tr_backend.cpp
  backEndState_t	backEnd;
  
-@@ -114,6 +126,9 @@
+@@ -121,6 +133,9 @@
  		idRenderTexture *sourceRenderTexture,
  		idRenderTexture *destinationRenderTexture );
  bool VK_GuiExecutor_EnsureFrameOpen( void );
@@ -4529,25 +4808,28 @@
 +bool VK_Speeds_Enabled( void );
 +void VK_Speeds_EndBackendFrame( double executeStartTicks, double executeEndTicks );
  bool VK_GuiExecutor_EndFrameAndPresent( void );
+ void VK_PostProcess_ApplyBackBuffer( void );
  bool VK_GuiExecutor_FrameIsOpen( void );
- bool VK_Exec_SetRenderTarget( idRenderTexture *renderTexture );
-@@ -341,35 +356,107 @@
+@@ -438,40 +453,116 @@
+ 	if ( !VK_Device_RecreateSwapchain() ) {
  		return false;
  	}
- 	(void)VK_Device_RecreateSwapchain();
 -	glConfig.vidWidth = (int)vkCtx.swapchainExtent.width;
 -	glConfig.vidHeight = (int)vkCtx.swapchainExtent.height;
 +	if ( !VK3D_OWNS_SCREEN_SIZE ) {
 +		glConfig.vidWidth = (int)vkCtx.swapchainExtent.width;
 +		glConfig.vidHeight = (int)vkCtx.swapchainExtent.height;
 +	}
- 	glConfig.isFullscreen = parms.fullScreen;
+ 	glConfig.isFullscreen = windowParms.fullScreen;
  	return true;
  }
  
 -void GLimp_SwapBuffers( void ) {
+-	// A latched device queues its own recovery restart (VulkanDevice.cpp).
+-	VK_Device_ServicePresentationRecovery();
 -	// live window-state poll, mirroring the GL seam
 -	if ( vkBackendServices != NULL && vkBackendServices->RefreshNativeWindowHandles != NULL ) {
+-		const unsigned long long windowBegin = r_rendererMetrics.GetInteger() > 0 ? R_RendererMetrics_CpuClock() : 0;
 -		renderModuleWindowInfo_t info;
 -		memset( &info, 0, sizeof( info ) );
 -		vkBackendServices->RefreshNativeWindowHandles( &info );
@@ -4566,13 +4848,15 @@
 +by which time any draw at all has opened the frame, so the size check there was
 +unreachable in every frame that drew something — i.e. all of them. Called from
 +both ends of the swap, it does the viewport work before the present and finds
-+the frame closed after it.
++the frame closed after it. Returns false only when a recreate was attempted
++and failed, in which case (as upstream does) the frame is not presented.
 +====================
 +*/
-+static void VK_PollWindowAndReconcileSwapchain( void ) {
++static bool VK_PollWindowAndReconcileSwapchain( void ) {
 +	if ( vkBackendServices == NULL || vkBackendServices->RefreshNativeWindowHandles == NULL ) {
-+		return;
++		return true;
 +	}
++	const unsigned long long windowBegin = r_rendererMetrics.GetInteger() > 0 ? R_RendererMetrics_CpuClock() : 0;
 +	renderModuleWindowInfo_t info;
 +	memset( &info, 0, sizeof( info ) );
 +	vkBackendServices->RefreshNativeWindowHandles( &info );
@@ -4620,56 +4904,63 @@
 -				if ( VK_Device_RecreateSwapchain() ) {
 -					glConfig.vidWidth = (int)vkCtx.swapchainExtent.width;
 -					glConfig.vidHeight = (int)vkCtx.swapchainExtent.height;
--				}
--			}
+-				} else return;
 +	}
-+	if ( info.pixelWidth <= 0 || info.pixelHeight <= 0 ) {
-+		return;
-+	}
-+	const bool extentMatches = ( (uint32_t)info.pixelWidth == vkCtx.swapchainExtent.width
-+			&& (uint32_t)info.pixelHeight == vkCtx.swapchainExtent.height );
-+	if ( extentMatches && !vk3dReconcilePending ) {
-+		return;
-+	}
-+	if ( VK_GuiExecutor_FrameIsOpen() ) {
-+		return;
-+	}
-+	const bool reconciled = extentMatches
-+			? true
-+			: VK_Device_RecreateSwapchainForReason( VK_RECREATE_POLL );
-+	if ( reconciled && !owns ) {
-+		glConfig.vidWidth = (int)vkCtx.swapchainExtent.width;
-+		glConfig.vidHeight = (int)vkCtx.swapchainExtent.height;
++	if ( info.pixelWidth > 0 && info.pixelHeight > 0 ) {
++		const bool extentMatches = ( (uint32_t)info.pixelWidth == vkCtx.swapchainExtent.width
++				&& (uint32_t)info.pixelHeight == vkCtx.swapchainExtent.height );
++		// only recreate between frames; an open frame presents into the
++		// old swapchain and OUT_OF_DATE handling catches the rest
++		if ( ( !extentMatches || vk3dReconcilePending ) && !VK_GuiExecutor_FrameIsOpen() ) {
++			const bool reconciled = extentMatches
++					? true
++					: VK_Device_RecreateSwapchainForReason( VK_RECREATE_POLL );
++			if ( !reconciled ) {
++				return false;
+ 			}
++			if ( !owns ) {
++				glConfig.vidWidth = (int)vkCtx.swapchainExtent.width;
++				glConfig.vidHeight = (int)vkCtx.swapchainExtent.height;
 +#if defined( OPENQ4_VISIONOS_3D )
-+		if ( vk3dReconcilePending ) {
-+			vk3dReconcilePending = false;
-+			common->Printf( "xr3d: 2D reconciled to %dx%d after leaving the panel\n",
-+					glConfig.vidWidth, glConfig.vidHeight );
- 		}
++				if ( vk3dReconcilePending ) {
++					vk3dReconcilePending = false;
++					common->Printf( "xr3d: 2D reconciled to %dx%d after leaving the panel\n",
++							glConfig.vidWidth, glConfig.vidHeight );
++				}
 +#endif
++			}
+ 		}
+-		R_RendererMetrics_EndPresentPhase( RENDERER_PRESENT_WINDOW_STATE, windowBegin );
  	}
++	R_RendererMetrics_EndPresentPhase( RENDERER_PRESENT_WINDOW_STATE, windowBegin );
++	return true;
 +}
-+
+ 
 +void GLimp_SwapBuffers( void ) {
++	// A latched device queues its own recovery restart (VulkanDevice.cpp).
++	VK_Device_ServicePresentationRecovery();
 +	// The one call per presented frame, and therefore the thrash detector's
 +	// definition of "this frame".
 +	VK_Device_NoteFrameBoundary();
-+	VK_PollWindowAndReconcileSwapchain();
- 
++	if ( !VK_PollWindowAndReconcileSwapchain() ) {
++		return;
++	}
++
  	// present whatever the frame holds; a frame with no draws still clears
  	VK_GuiExecutor_SetClearColor( vkClearColor );
-@@ -381,6 +468,10 @@
- 			VK_GuiExecutor_EndFrameAndPresent();
+ 	if ( vkCtx.surfaceExtentZero && !VK_GuiExecutor_FrameIsOpen() && !VK_Device_RecreateSwapchain() ) {
+@@ -490,6 +581,10 @@
+ 			R_RendererMetrics_EndPresentPhase( RENDERER_PRESENT_SWAP, swapBegin );
  		}
  	}
 +
 +	// The frame is closed now, so this is the one moment in the loop where a
 +	// changed drawable size can actually be adopted.
-+	VK_PollWindowAndReconcileSwapchain();
++	(void)VK_PollWindowAndReconcileSwapchain();
  }
  
  void GLimp_ActivateContext( void ) {
-@@ -445,6 +536,11 @@
+@@ -554,6 +649,11 @@
  	if ( !glConfig.isInitialized ) {
  		return;
  	}
@@ -4681,7 +4972,7 @@
  
  	R_ClassicGuiDomain_ResetFrame();
  	R_ClassicCinematicPostDomain_ResetFrame();
-@@ -711,6 +807,13 @@
+@@ -842,6 +942,13 @@
  	}
  	R_ClassicSpecialFrameDomain_FinalizeBackendFrame(
  		CLASSIC_SPECIAL_FRAME_BACKEND_VULKAN );

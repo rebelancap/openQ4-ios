@@ -88,6 +88,16 @@ RENDERER_DEFS=(
   -DVK_ENABLE_BETA_EXTENSIONS
 )
 
+# Staged wrap subprojects for the retained UI (sync-overlay.sh, D-116).
+SUBP="$ROOT/build/ios-subprojects"
+RMLUI_DIR="$(ls -d "$SUBP"/RmlUi-*/ 2>/dev/null | head -1 || true)"; RMLUI_DIR="${RMLUI_DIR%/}"
+JSONCPP_DIR="$(ls -d "$SUBP"/jsoncpp-*/ 2>/dev/null | head -1 || true)"; JSONCPP_DIR="${JSONCPP_DIR%/}"
+TESS2_DIR="$(ls -d "$SUBP"/libtess2-*/ 2>/dev/null | head -1 || true)"; TESS2_DIR="${TESS2_DIR%/}"
+GLSLANG_DIR="$(ls -d "$SUBP"/glslang-*/ 2>/dev/null | head -1 || true)"; GLSLANG_DIR="${GLSLANG_DIR%/}"
+for d in "$RMLUI_DIR" "$JSONCPP_DIR" "$TESS2_DIR" "$GLSLANG_DIR"; do
+	[ -d "$d" ] || { echo "FATAL: wrap subproject missing under $SUBP" >&2; exit 1; }
+done
+
 INCS=(
   # FIRST: the iOS volk shim shadows src/external/volk/volk.h (D-013). All nine
   # `#include "volk.h"` sites use the quoted form and none live inside volk's
@@ -96,15 +106,22 @@ INCS=(
   -I"$ROOT/ios/shell"                        # console bridge header
   -I"$GEN"                                   # openq4_version_generated.h
   -I"$TREE/src"
-  -I"$TREE/.tmp/gamelibs_stage/src/game"
+  -I"$TREE/src/game"
   -I"$TREE/subprojects/glew/include"
   -I"$TREE/subprojects/stb_vorbis"
   -I"$TREE/src/external/vulkan/include"
   -I"$TREE/src/external/volk"
   -I"$TREE/src/external/vma"
   -I"$DEPS/sdl-prefix/include"
+  # v0.14 engine sources include upstream's private SDL extension headers
+  # (SDL_openq4_native_fence.h, SDL_openq4_text_provenance.h) unconditionally.
+  # They are declarations only, used behind OPENQ4_SDL3_* capabilities that
+  # only upstream's patched Windows SDL advertises; our SDL does not carry the
+  # patches, so the headers come from the synced tree (D-116).
+  -I"$TREE/subprojects/packagefiles/sdl3/include"
   -I"$DEPS/openal-prefix/include"
   -I"$DEPS/openal-prefix/include/AL"
+  -I"$JSONCPP_DIR/include"                   # RetainedHud.cpp parses JSON (D-116)
 )
 case "$LANE" in
 	device)       TARGET_FLAGS=( -arch arm64 -miphoneos-version-min="$IOS_MIN" ) ;;
@@ -141,11 +158,44 @@ collect() {
 # listing them in meson_sources.py, so we drive the same tool.
 BSE_SRC="$( cd "$TREE" && python3 tools/build/list_sources.py "$TREE" src/bse )"
 
+# meson.build adds these client sources on top of meson_sources.py's engine
+# list (v0.14.000, D-116): the settings host/display model (meson.build
+# "engine_source_paths +=") and, for an SDL3 client, the native input driver
+# (its "openq4_engine_sources += files(...)" under use_sdl3_backend). A source
+# missing here is an undefined symbol at the app link, never a silent gap.
+ENGINE_EXTRA_SRC="src/ui/application/SystemSettingsHost.cpp
+src/ui/application/SystemDisplay.cpp
+src/sys/sdl3/NativeInputEmissionInventory.cpp
+src/sys/sdl3/NativeInputTransfers.cpp
+src/sys/sdl3/NativeInputDriver.cpp"
+for f in $ENGINE_EXTRA_SRC; do
+	grep -qF "'$f'" "$TREE/meson.build" || { echo "FATAL: $f is no longer named in meson.build — re-check D-116's client source additions" >&2; exit 1; }
+done
 ENGINE_SRC="$(collect engine)
+$ENGINE_EXTRA_SRC
 $(collect imagetools)
 $(collect render_geo)
 $BSE_SRC"
 RENDER_SRC="$(collect renderer_vk)"
+# The retained-UI runtime and its wrap subprojects (D-116): meson builds them as
+# their own static libraries with their own flags (no engine PCH, no engine
+# defines), so they are a separate group here too. Staged by sync-overlay.sh.
+UI_SRC="$("$ROOT/scripts/list-ios-ui-sources.py" "$TREE" "$SUBP")" \
+	|| { echo "FATAL: could not list the retained-UI sources (run scripts/sync-overlay.sh)" >&2; exit 1; }
+# ui object names: group + path relative to its root, flattened.
+ui_obj_name() { # <group> <abs path>
+	local rel="$2"
+	case "$1" in
+		retained) rel="${rel#"$TREE"/}" ;;
+		rmlui)    rel="${rel#"$RMLUI_DIR"/}" ;;
+		jsoncpp)  rel="${rel#"$JSONCPP_DIR"/}" ;;
+		tess2)    rel="${rel#"$TESS2_DIR"/}" ;;
+		glslang)  rel="${rel#"$GLSLANG_DIR"/}" ;;
+		*)        rel="${rel#"$TREE"/}" ;;
+	esac
+	echo "ui_$1_$(echo "$rel" | tr '/' '_').o"
+}
+n_ui=$(echo "$UI_SRC" | grep -c . || true)
 n_engine=$(echo "$ENGINE_SRC" | grep -c . || true)
 n_render=$(echo "$RENDER_SRC" | grep -c . || true)
 # The compiled-in version banner is refreshed here rather than only by
@@ -165,7 +215,8 @@ echo "$VERSION_HASH" > "$OUT/.version-header-sha256"
 # removed or renamed an upstream file the stale object would otherwise be
 # linked in silently — duplicate symbols at best, last pin's code at worst.
 EXPECTED_OBJS="$( { echo "$ENGINE_SRC"; echo "$RENDER_SRC"; } | grep . | tr '/' '_' | sed 's/$/.o/'
-	printf '%s\n' glew_dedicated.o stb_vorbis.o )"
+	printf '%s\n' glew_dedicated.o stb_vorbis.o
+	echo "$UI_SRC" | grep . | while IFS=$'\t' read -r g p; do ui_obj_name "$g" "$p"; done )"
 stale=0
 for o in "$OUT"/obj/*.o; do
 	[ -e "$o" ] || continue
@@ -259,6 +310,43 @@ compile_c "$TREE/subprojects/stb_vorbis/stb_vorbis.c" stb_vorbis -I"$TREE/subpro
 # volk.c is deliberately NOT compiled on iOS. ios/compat/volk.h replaces it with
 # direct calls into statically linked MoltenVK — see D-013 for why the two
 # cannot share a symbol namespace.
+
+echo "==> compiling $n_ui side-library sources (retained UI + RmlUi/JsonCpp/libtess2, glslang + material compiler, native input queue, VK device selection)"
+UIWRAP="$OUT/.compile-ui.sh"
+{
+	echo '#!/usr/bin/env bash'
+	echo 'set -euo pipefail'
+	printf 'OUT=%q\nCXX=%q\nCC=%q\nTREE=%q\n' "$OUT" "$CXX" "$CC" "$TREE"
+	printf 'RMLUI_DIR=%q\nJSONCPP_DIR=%q\nTESS2_DIR=%q\nGLSLANG_DIR=%q\nSDLINC=%q\n' "$RMLUI_DIR" "$JSONCPP_DIR" "$TESS2_DIR" "$GLSLANG_DIR" "$DEPS/sdl-prefix/include"
+	printf 'BASE=('; printf '%q ' -isysroot "$SDK" "${TARGET_FLAGS[@]}" -O2 -DNDEBUG -Wno-everything; echo ')'
+	cat <<'BODY'
+g="$1"; src="$2"; obj="$3"
+log="$OUT/logs/$obj.log"
+RML=( -DRMLUI_STATIC_LIB -DRMLUI_NO_THIRDPARTY_CONTAINERS -I"$RMLUI_DIR/Include" )
+case "$g" in
+	tess2)    cmd=( "$CC" -x c -std=c11 "${BASE[@]}" -I"$TESS2_DIR/Include" ) ;;
+	jsoncpp)  cmd=( "$CXX" -x c++ -std=c++20 "${BASE[@]}" -I"$JSONCPP_DIR/include" ) ;;
+	rmlui)    cmd=( "$CXX" -x c++ -std=c++20 "${BASE[@]}" "${RML[@]}" '-DRMLUI_VERSION="6.3"' ) ;;
+	retained) cmd=( "$CXX" -x c++ -std=c++20 "${BASE[@]}" "${RML[@]}" -I"$JSONCPP_DIR/include" -I"$TESS2_DIR/Include" -I"$TREE/src" ) ;;
+	glslang)  cmd=( "$CXX" -x c++ -std=c++17 "${BASE[@]}" -fvisibility=hidden -fvisibility-inlines-hidden
+	                -DENABLE_SPIRV -DENABLE_OPT=0 -DGLSLANG_OSINCLUDE_UNIX -I"$GLSLANG_DIR" ) ;;
+	matcomp)  cmd=( "$CXX" -x c++ -std=c++20 "${BASE[@]}" -I"$GLSLANG_DIR" ) ;;
+	vkdevsel) cmd=( "$CXX" -x c++ -std=c++20 "${BASE[@]}" -I"$TREE/src/external/vulkan/include" ) ;;
+	textin)   cmd=( "$CXX" -x c++ -std=c++20 "${BASE[@]}" -I"$SDLINC" -I"$TREE/subprojects/packagefiles/sdl3/include" ) ;;
+	nativeq)  cmd=( "$CXX" -x c++ -std=c++20 "${BASE[@]}" -DUSE_SDL3 -I"$TREE/src" -I"$SDLINC" -I"$TREE/subprojects/packagefiles/sdl3/include" ) ;;
+	*) echo "unknown group $g" >&2; exit 1 ;;
+esac
+if ! "${cmd[@]}" -c "$src" -o "$OUT/obj/$obj" > "$log" 2>&1; then
+	echo "FAILED $src" >&2
+	grep -E 'error:' "$log" | head -5 >&2
+	exit 1
+fi
+BODY
+} > "$UIWRAP"
+chmod +x "$UIWRAP"
+echo "$UI_SRC" | grep . | while IFS=$'\t' read -r g p; do printf '%s\t%s\t%s\n' "$g" "$p" "$(ui_obj_name "$g" "$p")"; done \
+	| tr '\t' '\n' | xargs -n 3 -P "$JOBS" "$UIWRAP" \
+	|| { echo "FATAL: retained-UI compilation failed" >&2; exit 1; }
 
 echo "==> archiving"
 # libtool, not ar: macOS ar flattens duplicate member basenames and silently

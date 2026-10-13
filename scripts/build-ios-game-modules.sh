@@ -23,7 +23,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TREE="$ROOT/build/src-ios"
-STAGE="$TREE/.tmp/gamelibs_stage"
+# Game sources are in-tree since v0.14.000 (D-116): the "stage" is the tree.
+STAGE="$TREE"
 GEN="$ROOT/build/ios-gen"
 DEPS_BASE="$ROOT/build"
 IOS_MIN=16.0
@@ -165,14 +166,19 @@ BODY
 	# Ground rule 3: assert, do not assume. If anything but the entry point is
 	# exported, the two modules can interpose each other at runtime and the
 	# failure is silent state corruption rather than a link error.
-	local exports
-	exports="$(nm -gU "$dylib" 2>/dev/null | awk '{print $3}' | grep -v '^$' || true)"
-	if [ "$(echo "$exports" | grep -c .)" -ne 1 ] || [ "$(echo "$exports" | tr -d ' ')" != "_GetGameAPI" ]; then
-		echo "FATAL: $(basename "$dylib") must export exactly _GetGameAPI, got:" >&2
-		echo "$exports" | head -20 >&2
+	# The allowed set is upstream's own export list, not a copy of it: v0.14
+	# added _openQ4_Mem_GetModuleStats (looked up by handle, never called
+	# inside either module — see the .exp file's own justification).
+	local exports allowed
+	exports="$(nm -gU "$dylib" 2>/dev/null | awk '{print $3}' | grep -v '^$' | sort || true)"
+	allowed="$(grep -v '^[[:space:]]*#' "$TREE/tools/build/darwin_game_module.exp" | tr -d ' \t' | grep . | sort)"
+	if [ -z "$allowed" ] || [ "$exports" != "$allowed" ]; then
+		echo "FATAL: $(basename "$dylib") must export exactly upstream's darwin_game_module.exp set:" >&2
+		echo "  allowed: $(echo $allowed)" >&2
+		echo "  got:     $(echo "$exports" | head -20 | tr '\n' ' ')" >&2
 		exit 1
 	fi
-	echo "    $(basename "$dylib")  $(ls -lh "$dylib" | awk '{print $5}')  exports: _GetGameAPI only"
+	echo "    $(basename "$dylib")  $(ls -lh "$dylib" | awk '{print $5}')  exports: $(echo $allowed) only"
 }
 
 case "$WHICH" in

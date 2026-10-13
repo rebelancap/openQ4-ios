@@ -1,6 +1,6 @@
 --- a/src/framework/Session_menu.cpp
 +++ b/src/framework/Session_menu.cpp
-@@ -1295,7 +1295,16 @@
+@@ -1580,7 +1580,16 @@
  
  	const int numModels = declManager->GetNumDecls( DECL_PLAYER_MODEL );
  	for ( int i = 0; i < numModels; ++i ) {
@@ -18,7 +18,7 @@
  		if ( !playerModel ) {
  			continue;
  		}
-@@ -1314,6 +1323,32 @@
+@@ -1599,6 +1608,32 @@
  	}
  }
  
@@ -51,13 +51,18 @@
  static void SetMainMenuMPModelVars( idUserInterface *gui ) {
  	if ( !gui ) {
  		return;
-@@ -1323,9 +1358,37 @@
+@@ -1608,15 +1643,37 @@
  	const int menuModelTeam = MainMenuResolveModelTeam();
  	MainMenuSyncMPSettingsGuiState( gui, menuModelTeam );
  
--	const idDeclEntityDef *menuDef = static_cast<const idDeclEntityDef *>( declManager->FindType( DECL_ENTITYDEF, "player_marine_mp_ui", false ) );
--	const idDeclEntityDef *fallbackDef = static_cast<const idDeclEntityDef *>( declManager->FindType( DECL_ENTITYDEF, "player_marine_mp", false ) );
--	const idDeclEntityDef *def = menuDef ? menuDef : fallbackDef;
+-	// Look the fallback up only when it is needed. FindType parses the decl, and
+-	// parsing a player entityDef precaches everything it references -- models,
+-	// animations, weapons and sounds. Resolving both unconditionally paid that
+-	// cost for "player_marine_mp" on every main menu build and then threw the
+-	// result away whenever the _ui variant existed, which it normally does.
+-	const idDeclEntityDef *def = static_cast<const idDeclEntityDef *>( declManager->FindType( DECL_ENTITYDEF, "player_marine_mp_ui", false ) );
+-	if ( def == NULL ) {
+-		def = static_cast<const idDeclEntityDef *>( declManager->FindType( DECL_ENTITYDEF, "player_marine_mp", false ) );
 +	// Only a handful of strings are read from the player def below (the
 +	// default model names and the fallback model/head/skin), but parsing an
 +	// entityDef with caching runs CacheDictionaryMedia over it: MD5 meshes,
@@ -87,12 +92,12 @@
 +			defDict = fallbackDef->dict;
 +			haveDef = true;
 +		}
-+	}
+ 	}
 +	const idDict *def = haveDef ? &defDict : NULL;
  
  	idStr buildValues;
  	idStr buildNames;
-@@ -1339,9 +1402,9 @@
+@@ -1630,9 +1687,9 @@
  	const char *selectedModelDecl = cvarSystem->GetCVarString( modelCVar.c_str() );
  	if ( ( !selectedModelDecl || !selectedModelDecl[0] ) && def ) {
  		if ( menuModelTeam >= 0 && menuModelTeam < 2 ) {
@@ -104,7 +109,7 @@
  		}
  	}
  
-@@ -1362,12 +1425,12 @@
+@@ -1660,12 +1717,12 @@
  	}
  
  	if ( !selectedModelName.Length() && def ) {
@@ -121,7 +126,7 @@
  	}
  
  	if ( selectedModelName.Length() || selectedHeadName.Length() || selectedSkinName.Length() ) {
-@@ -1779,6 +1842,13 @@
+@@ -2365,6 +2422,13 @@
  	fileSystem->CloseFile( file );
  	return valid;
  }
@@ -135,7 +140,7 @@
  
  static bool Session_MenuReadSaveDescription( const idStr &slotName, sessionMenuSaveDescription_t &description ) {
  	description.saveName.Clear();
-@@ -1921,7 +1991,38 @@
+@@ -2507,7 +2571,38 @@
  		return;
  	}
  
@@ -174,7 +179,7 @@
  	guiActive->SetStateString( "saveGameDescription", "" );
  	guiActive->SetStateString( "saveGameDate", "" );
  	guiActive->SetStateString( "saveGameTime", "" );
-@@ -1938,6 +2039,16 @@
+@@ -2524,6 +2619,16 @@
  		} else {
  			name = loadGameList[i];
  		}
@@ -191,7 +196,7 @@
  
  		guiActive->SetStateString( va("loadgame_item_%i", i), name);
  	}
-@@ -2136,7 +2247,18 @@
+@@ -2727,7 +2832,18 @@
  	if ( !idStr::Icmp( cmd, "loadGame" ) ) {
  		int choice = guiActive->State().GetInt("loadgame_sel_0");
  		if ( choice >= 0 && choice < loadGameList.Num() ) {
@@ -210,7 +215,7 @@
  		}
  		return true;
  	}
-@@ -2580,7 +2702,14 @@
+@@ -3246,7 +3362,14 @@
  			if ( guiActive->State().GetBool( "lanSet" ) ) {
  				cmdSystem->BufferCommandText( CMD_EXEC_NOW, "LANScan" );
  			} else {

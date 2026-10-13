@@ -215,7 +215,7 @@ run alone:
 
 | Step | Script |
 | --- | --- |
-| Fetch the pinned openQ4 + openQ4-game pair (`UPSTREAM.pin`) into `vendor/` | `scripts/fetch-vendor.sh` |
+| Fetch the pinned openQ4 (`UPSTREAM.pin`; game sources in-tree) into `vendor/` | `scripts/fetch-vendor.sh` |
 | Build openQ4's `baseoq4` runtime packs with upstream's own pack tools | `scripts/build-baseoq4-paks.sh` |
 | Apply this port's patches to a copy of upstream (`build/src-ios`) | `scripts/sync-overlay.sh` |
 | SDL3 3.4.10, OpenAL Soft 1.25.2, MoltenVK 1.4.1 (static) | `scripts/build-ios-deps.sh <lane>` |
@@ -248,7 +248,7 @@ devices use them.
 
 See [`NOTICE.md`](NOTICE.md). In short: the engine, this port's code and its
 build scripts are **GPLv3** ([`LICENSE`](LICENSE)); the game modules come from
-openQ4-game, are derived from the Quake 4 SDK and remain under **id Software's
+openQ4's `src/game`/`src/mpgame`, are derived from the Quake 4 SDK and remain under **id Software's
 Quake 4 SDK EULA** (non-commercial, Quake 4 required) — which is why this app is
 only ever distributed free. Third-party licences are in
 [`licenses/`](licenses/README.md) and inside every app bundle.
@@ -256,7 +256,7 @@ only ever distributed free. Third-party licences are in
 ## Credits
 
 - [openQ4](https://github.com/themuffinator/openQ4) and
-  [openQ4-game](https://github.com/themuffinator/openQ4-game) by themuffinator
+  [openQ4-game](https://github.com/themuffinator/openQ4-game) (now in-tree in openQ4) by themuffinator
   and contributors — the engine, the Vulkan renderer, the reconstructed Quake 4
   game code, BSE, the Arena Campaign and the replacement UI this port runs
   unmodified underneath its patches.

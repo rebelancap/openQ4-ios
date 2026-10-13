@@ -20,18 +20,17 @@ published Additional Terms" — those Additional Terms are in
 ## The game modules — Quake 4 SDK EULA, NOT the GPL
 
 The single-player and multiplayer game modules (`game-sp`, `game-mp`) are
-built from [openQ4-game](https://github.com/themuffinator/openQ4-game) and the
-patches in `overlay/patches-game/`. In upstream's words: "The game-library code
-in openQ4-game is derived from the Quake 4 SDK and remains subject to id
-Software's SDK EULA." openQ4-game's own licence file states it is "licensed
-under the QUAKE 4 Software Development Kit Limited Use License Agreement (EULA),
-not the GNU GPL", and summarises the EULA's key points as: a limited,
-non-exclusive licence from id Software; non-commercial distribution and use
-limits unless separately authorised by id Software in writing; the full
-version of QUAKE 4 is required to operate the SDK/game libraries; provided
-"AS IS". The authoritative text is
+built from openQ4's `src/game/` and `src/mpgame/` (until openQ4 v0.14 these
+lived in the separate [openQ4-game](https://github.com/themuffinator/openQ4-game)
+repository) and the patches in `overlay/patches-game/`. In upstream's words
+(`LICENSING.md`): the "SDK-derived game libraries in `src/game/` and
+`src/mpgame/`" are under the "Quake 4 SDK Limited Use License Agreement, with
+original notices and any explicit per-file third-party terms preserved"; "The
+game libraries require the full version of Quake 4. The SDK agreement restricts
+commercial use and distribution and must accompany copies covered by it." The
+authoritative text is
 [`licenses/openQ4-game/EULA.Development Kit.rtf`](licenses/openQ4-game/), with
-openQ4-game's licence file beside it.
+upstream's `LICENSING.md` beside it.
 
 The patches in `overlay/patches-game/` modify that SDK-derived code and are
 offered on the same terms as the code they modify.
@@ -58,6 +57,9 @@ app bundle.
 | Khronos Vulkan headers | Apache 2.0 OR MIT |
 | stb_vorbis | MIT OR public domain |
 | GLEW (GL-free build) | Modified BSD |
+| RmlUi 6.3, JsonCpp 1.9.6 | MIT (JsonCpp: MIT OR public domain) |
+| libtess2 | SGI Free Software License B 2.0 |
+| glslang 15.1.0 | BSD / MIT / Apache 2.0 (per-file; see `licenses/glslang/`) |
 
 ## Not affiliated
 

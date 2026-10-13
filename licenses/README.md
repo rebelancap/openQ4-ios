@@ -12,7 +12,7 @@ the component's own source at the pinned version by `scripts/gen-licenses.sh`
 | Directory | Component | Licence |
 |---|---|---|
 | `openQ4/` | openQ4 engine | GNU GPL v3, plus the Doom 3 / Doom 3 BFG Additional Terms for files that keep those headers |
-| `openQ4-game/` | openQ4-game (the SP and MP game modules) | Quake 4 SDK Limited Use License Agreement (EULA) — **not** the GPL |
+| `openQ4-game/` | the SP and MP game modules (openQ4 `src/game`, `src/mpgame`; formerly the openQ4-game repo) | Quake 4 SDK Limited Use License Agreement (EULA) — **not** the GPL; `LICENSING.md` is upstream's component split |
 | `SDL3/` | SDL 3.4.10 | zlib |
 | `openal-soft/` | OpenAL Soft 1.25.2 (+ pffft, fmt, gsl, BSD-3 portions) | LGPL 2.1 — see `SOURCE.md` |
 | `MoltenVK/` | MoltenVK 1.4.1 (static), including SPIRV-Cross | Apache 2.0 |
@@ -22,6 +22,10 @@ the component's own source at the pinned version by `scripts/gen-licenses.sh`
 | `Vulkan-Headers/` | Khronos Vulkan headers | Apache 2.0 OR MIT |
 | `stb_vorbis/` | stb_vorbis 1.22 | MIT OR public domain |
 | `GLEW/` | GLEW (GL-free dedicated build) | Modified BSD |
+| `RmlUi/` | RmlUi 6.3 (openQ4 v0.14 retained UI) | MIT |
+| `JsonCpp/` | JsonCpp 1.9.6 | MIT OR public domain |
+| `libtess2/` | libtess2 (8dbd648) | SGI Free Software License B 2.0 |
+| `glslang/` | glslang 15.1.0 (runtime material compiler) | BSD 3-Clause, BSD 2-Clause, MIT, Apache 2.0 and others — see the file |
 
 ## Texts not taken from a vendored tree
 

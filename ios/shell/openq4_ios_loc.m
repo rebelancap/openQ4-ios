@@ -44,7 +44,7 @@ NSString *OpenQ4_L(const char *key) {
  * 7 is the Load Game label of the autosave copy restartLevelFromSave keeps.
  */
 const char *OpenQ4_iOS_SaveText(int which) {
-	static const char *cache[9];
+	static const char *cache[10];
 	if (which < 0 || which >= (int)(sizeof(cache) / sizeof(cache[0]))) {
 		return "";
 	}
@@ -64,6 +64,8 @@ const char *OpenQ4_iOS_SaveText(int which) {
 			case 7: s = OpenQ4_L("Before restart"); break;
 			case 8: s = OpenQ4_L("The level was not restarted: a copy of its autosave could not be kept, so nothing was changed. "
 								 "If Load Game already lists nine \"Before restart\" copies of this level, delete one and try again."); break;
+			case 9: s = OpenQ4_L("This save could not be restored. Start %s again from the beginning, with the weapons and armor you had? "
+								 "This replaces the level's autosave; a copy of it is kept in the list."); break;
 			}
 			cache[which] = strdup(s != nil ? s.UTF8String : "");
 		}

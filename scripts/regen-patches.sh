@@ -58,7 +58,7 @@ PATCH_GROUPS=(
 	# pristine side. Grep the patch for OPENQ4_VISIONOS_3D to review it alone.
 	"0019-vulkan-backend-timers-live-swapchain-extent-and-stereo-present.patch:src/renderer/Vulkan/vk_GuiExecutor.cpp src/renderer/Vulkan/vk_Backend.cpp"
 	"0020-vulkan-warn-inert-screen-fraction.patch:src/renderer/RenderSystem.cpp"
-	"0021-vulkan-swapchain-extent-recreate-accounting-and-open-batch-retire.patch:src/renderer/Vulkan/VulkanDevice.cpp src/renderer/Vulkan/VulkanDevice.h"
+	"0021-vulkan-swapchain-extent-recreate-accounting-and-pipeline-cache-checkpoint.patch:src/renderer/Vulkan/VulkanDevice.cpp src/renderer/Vulkan/VulkanDevice.h"
 	"0022-build-string-names-the-apple-platform.patch:src/sys/sys_public.h"
 	# The GPU pass-timing instrument lives in 0019 with the CPU stage timers it
 	# extends; these two files only carry its call sites (the shadow atlas is
@@ -67,11 +67,9 @@ PATCH_GROUPS=(
 	"0023-vulkan-gpu-timing-markers-in-lights-and-shadows.patch:src/renderer/Vulkan/vk_Interactions.cpp src/renderer/Vulkan/vk_ShadowMap.cpp"
 	"0024-internet-master-servers.patch:src/framework/async/AsyncNetwork.cpp src/framework/async/AsyncClient.cpp"
 	"0025-vid-restart-under-a-renderer-module.patch:src/renderer/RenderSystem_init.cpp"
-	# The MSAA capture-resolve fix (D-094). Its storage half lives here; the
-	# VK_Exec_CopyRender call site is in vk_GuiExecutor.cpp, which belongs to
-	# 0019 — a file belongs to exactly one patch, so the hunk rides along there
-	# rather than splitting the file across two groups.
-	"0026-vulkan-resolve-multisampled-capture-source.patch:src/renderer/Vulkan/vk_Image.cpp src/renderer/Vulkan/vk_Image.h"
+	# 0026 (the MSAA capture-resolve fix, D-094) was retired by D-116: upstream
+	# merged it as PR #166 (4e47314) and v0.14.000 carries it. The number stays
+	# unused so older DECISIONS entries keep pointing at the right history.
 	# Phase 6 round 3 (D-101): where the EYE enters the shared render front end —
 	# the post-translation in R_SetViewMatrix and the off-axis skew in
 	# R_SetupProjection, plus the r_stereo3dSeparation/Convergence cvars and the
@@ -87,14 +85,23 @@ PATCH_GROUPS=(
 	# instead of the OpenAL voice's GetAmplitude() stub (always 1.0). The
 	# counters that measure it ride in 0005, which owns sdl3_backend.cpp.
 	"0028-rumble-follows-the-shake-envelope.patch:src/sound/snd_world.cpp"
+	# D-116: v0.14 binds the renderer to the thread that first initialised it;
+	# the iOS shell inits on main and then runs every frame on its engine
+	# thread, so the engine thread adopts ownership once (called from
+	# ios/shell/openq4_ios_bridge.m before its first frame).
+	"0029-ios-renderer-owner-follows-the-engine-thread.patch:src/renderer/RendererResourceSettings.cpp"
+	# D-116: saves from 1.0.0 (payload v3) restore on v0.14. A saved GUI's blob
+	# is read through the GUI file that wrote it (table + ui_legacySaveShapes);
+	# the session side (payload version handed over, failed restore -> D-114
+	# rescue) rides in 0009, which owns Session.cpp.
+	"0030-restore-older-save-payloads-through-legacy-gui-shapes.patch:src/ui/UserInterface.cpp"
 )
 
-# The same table for the SECOND pristine upstream, vendor/openQ4-game (D-070).
-#
-# Paths are relative to the gamelibs STAGE root, and only src/game and
-# src/mpgame are ours: the stage also carries mirrored copies of the ENGINE's
-# idlib/renderer/ui/sys/bse/MayaImport, which are already patched by the engine
-# overlay and would otherwise show up here as a second, bogus set of edits.
+# The same table for the SDK-EULA game sources (D-070). Until v0.13.x they were
+# a second upstream (openQ4-game) staged into .tmp/gamelibs_stage; since
+# v0.14.000 they are in-tree, src/game and src/mpgame of vendor/openQ4 (D-116),
+# and these patches are applied to build/src-ios after the engine set. They stay
+# a separate set because they modify SDK-EULA code, not GPL code.
 GAME_PATCH_GROUPS=(
 	"0001-in-world-gui-touch-ray.patch:src/game/Player.cpp src/mpgame/Player.cpp"
 	"0002-pad-rumble-on-fire-and-damage.patch:src/game/PlayerView.cpp src/mpgame/PlayerView.cpp"
@@ -107,7 +114,8 @@ done
 
 echo "==> checking every edited file is assigned to a patch"
 # -q so identical files cost nothing; the tree is ~2500 files.
-EDITED="$(cd vendor/openQ4 && find src -type f \( -name '*.cpp' -o -name '*.h' -o -name '*.mm' -o -name '*.m' \) -print | sort | while read -r f; do
+# src/game and src/mpgame are the game set below (in-tree since v0.14, D-116).
+EDITED="$(cd vendor/openQ4 && find src \( -path src/game -o -path src/mpgame \) -prune -o -type f \( -name '*.cpp' -o -name '*.h' -o -name '*.mm' -o -name '*.m' \) -print | sort | while read -r f; do
 	if [ -f "$ROOT/build/src-ios/$f" ] && ! cmp -s "$ROOT/vendor/openQ4/$f" "$ROOT/build/src-ios/$f"; then
 		echo "$f"
 	fi
@@ -169,9 +177,9 @@ done
 # compile from, so it is where a game-side edit is made and where it has to be
 # captured back from — and an edit left only there is destroyed by the very next
 # sync-overlay.sh run, which rebuilds the stage from pristine.
-GAME_STAGE="build/src-ios/.tmp/gamelibs_stage"
+GAME_STAGE="build/src-ios"
 if [ ! -d "$GAME_STAGE/src/game" ]; then
-	echo "FATAL: no gamelibs stage at $GAME_STAGE — run scripts/sync-overlay.sh first" >&2
+	echo "FATAL: no game sources at $GAME_STAGE/src/game — run scripts/sync-overlay.sh first" >&2
 	exit 1
 fi
 mkdir -p overlay/patches-game
@@ -182,8 +190,8 @@ for g in "${GAME_PATCH_GROUPS[@]}"; do
 done
 
 echo "==> checking every edited game file is assigned to a patch"
-GAME_EDITED="$(cd vendor/openQ4-game && find src/game src/mpgame -type f \( -name '*.cpp' -o -name '*.h' \) -print | sort | while read -r f; do
-	if [ -f "$ROOT/$GAME_STAGE/$f" ] && ! cmp -s "$ROOT/vendor/openQ4-game/$f" "$ROOT/$GAME_STAGE/$f"; then
+GAME_EDITED="$(cd vendor/openQ4 && find src/game src/mpgame -type f \( -name '*.cpp' -o -name '*.h' \) -print | sort | while read -r f; do
+	if [ -f "$ROOT/$GAME_STAGE/$f" ] && ! cmp -s "$ROOT/vendor/openQ4/$f" "$ROOT/$GAME_STAGE/$f"; then
 		echo "$f"
 	fi
 done)"
@@ -214,5 +222,5 @@ done
 
 echo "==> regenerating game overlay patches"
 for g in "${GAME_PATCH_GROUPS[@]}"; do
-	emit overlay/patches-game vendor/openQ4-game "$GAME_STAGE" "${g%%:*}" ${g#*:}
+	emit overlay/patches-game vendor/openQ4 "$GAME_STAGE" "${g%%:*}" ${g#*:}
 done

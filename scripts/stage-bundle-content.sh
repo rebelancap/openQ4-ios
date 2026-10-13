@@ -70,6 +70,17 @@ python3 "$ROOT/scripts/gen-ios-demo-menu-gui.py" \
 	"$ROOT/vendor/openQ4/content/baseoq4/pak0/guis/demo_menu.gui" \
 	"$APP/baseoq4/guis/demo_menu.gui"
 
+echo "==> staging the legacy HUD shapes for older saves"
+# D-116: the 1.0.0-era (openQ4 v0.13.2, save payload v3) guis/hud.gui and
+# guis/hud_strogg.gui, read only while restoring a payload-v3 save so its HUD
+# blobs parse against the tree that wrote them (UserInterface.cpp legacy GUI
+# shapes). Loose, beside the paks, for the same MD5 reason as the demo menu; a
+# path no stock file uses, so they never override anything. Provenance:
+# ios/baseoq4/guis/savecompat/README.md.
+rm -rf "$APP/baseoq4/guis/savecompat"
+mkdir -p "$APP/baseoq4/guis/savecompat"
+cp -R "$ROOT/ios/baseoq4/guis/savecompat/payload3" "$APP/baseoq4/guis/savecompat/"
+
 echo "==> staging game modules"
 ls "$MODULES"/*.dylib >/dev/null 2>&1 || { echo "FATAL: no game modules in $MODULES" >&2; exit 1; }
 cp "$MODULES"/*.dylib "$APP/Frameworks/"
@@ -95,13 +106,19 @@ for required in \
 	"$APP/baseoq4/pak1.pk4" \
 	"$APP/baseoq4/openq4_profile_ios.cfg" \
 	"$APP/baseoq4/guis/demo_menu.gui" \
+	"$APP/baseoq4/guis/savecompat/payload3/hud.gui" \
+	"$APP/baseoq4/guis/savecompat/payload3/hud_strogg.gui" \
 	"$APP/Frameworks/game-sp_arm64.dylib" \
 	"$APP/Frameworks/game-mp_arm64.dylib" \
 	"$APP/licenses/LICENSE" \
 	"$APP/licenses/NOTICE.md" \
 	"$APP/licenses/openQ4-game/EULA.Development Kit.rtf" \
 	"$APP/licenses/openal-soft/COPYING" \
-	"$APP/licenses/MoltenVK/LICENSE"
+	"$APP/licenses/MoltenVK/LICENSE" \
+	"$APP/licenses/RmlUi/LICENSE.txt" \
+	"$APP/licenses/JsonCpp/LICENSE" \
+	"$APP/licenses/libtess2/LICENSE.txt" \
+	"$APP/licenses/glslang/LICENSE.txt"
 do
 	[ -f "$required" ] || { echo "FATAL: not staged: $required" >&2; exit 1; }
 done

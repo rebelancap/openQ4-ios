@@ -6,7 +6,7 @@
 # Runs, in order, every step the lane needs — each one idempotent and each one
 # failing loudly:
 #
-#   fetch-vendor.sh            the pinned openQ4 + openQ4-game pair -> vendor/
+#   fetch-vendor.sh            the pinned openQ4 (game sources in-tree) -> vendor/
 #   build-baseoq4-paks.sh      openQ4's own runtime packs (skipped when the
 #                              packs come from a macOS oracle build instead)
 #   sync-overlay.sh            vendor + overlay patches -> build/src-ios

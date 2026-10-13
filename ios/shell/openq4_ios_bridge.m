@@ -1231,10 +1231,19 @@ static atomic_int g_catchUpFrames  = 0;
  * worth doing properly rather than rushed on top of a live bug. This gets the
  * stack — the actual defect — with no concurrency introduced at all.
  */
+extern int OpenQ4_iOS_AdoptRendererThread(void);
+
 static void *OpenQ4_EngineThread(void *arg) {
 	(void)arg;
 	pthread_setname_np("openq4-engine");
 	OpenQ4_iOS_SetSampleTargetToSelf();
+	// v0.14 renderer: ownership follows the frame loop off the main thread
+	// (D-116; overlay 0029). Before the first frame, so no render work races it.
+	if (!OpenQ4_iOS_AdoptRendererThread()) {
+		fprintf(stderr, "openQ4: FATAL: the engine thread could not adopt the renderer\n");
+		abort();
+	}
+	fprintf(stdout, "openQ4: renderer owner thread handed to the engine thread\n");
 	for (;;) {
 		dispatch_semaphore_wait(g_frameSem, DISPATCH_TIME_FOREVER);
 		OpenQ4_iOS_EngineFrame();

@@ -13,7 +13,7 @@
  #include "../bse/BSE_API.h"
  // jmarshall end
  
-@@ -2361,6 +2367,20 @@
+@@ -2472,6 +2478,20 @@
  =================
  */
  const idDecl *idDeclManagerLocal::FindType( declType_t type, const char *name, bool makeDefault, bool noCaching) {

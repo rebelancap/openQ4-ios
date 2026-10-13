@@ -1,8 +1,8 @@
 --- a/src/framework/Common.cpp
 +++ b/src/framework/Common.cpp
-@@ -30,6 +30,9 @@
+@@ -31,6 +31,9 @@
  
- 
+ #include "NativeInputDispatch.h"
  //#include "../renderer/Image.h"
 +#if defined( __APPLE__ )
 +#include <TargetConditionals.h>
@@ -10,7 +10,7 @@
  #include "../bse/BSE_API.h"
  #include "../imagetools/ImageTools.h"
  #include "../render_geo/RenderGeometry.h"
-@@ -48,6 +51,16 @@
+@@ -59,6 +62,16 @@
  #define MAX_WARNING_LIST	256
  
  void openQ4_PrintFramePacingSnapshot( const char *reason );
@@ -27,16 +27,16 @@
  void openQ4_RecordMultiplayerFramePacing( int frameStartMsec );
  
  static const int OPENQ4_ENTITYDEF_MEDIA_CACHE_TOOL_MASK =
-@@ -139,7 +152,7 @@
+@@ -153,7 +166,7 @@
  idCVar com_videoRam( "com_videoRam", "64", CVAR_INTEGER | CVAR_SYSTEM | CVAR_NOCHEAT | CVAR_ARCHIVE, "holds the last amount of detected video ram" );
  idCVar com_activeGameModule( "com_activeGameModule", "", CVAR_SYSTEM | CVAR_NOCHEAT, "active game module (game_sp/game_mp)" );
  idCVar com_nextGameModule( "com_nextGameModule", "", CVAR_SYSTEM | CVAR_NOCHEAT, "internal one-shot game module override for reloadEngine" );
--idCVar com_platformProfile( "com_platformProfile", "default", CVAR_SYSTEM | CVAR_INIT, "startup platform profile (default or steamdeck)" );
-+idCVar com_platformProfile( "com_platformProfile", "default", CVAR_SYSTEM | CVAR_INIT, "startup platform profile (default, steamdeck or ios)" );
+-idCVar com_platformProfile( "com_platformProfile", "default", CVAR_SYSTEM | CVAR_INIT, "startup platform profile (default, steamdeck or couch)" );
++idCVar com_platformProfile( "com_platformProfile", "default", CVAR_SYSTEM | CVAR_INIT, "startup platform profile (default, steamdeck, couch or ios)" );
  
  static bool openQ4_IsValidGameModuleName( const char *moduleName );
  
-@@ -373,6 +386,15 @@
+@@ -476,6 +489,15 @@
  static bool commonLoadingContinueInputActive = false;
  
  void openQ4_SetLoadingContinueInputActive( bool active ) {
@@ -52,14 +52,14 @@
  	commonLoadingContinueInputActive = active;
  }
  
-@@ -786,7 +808,17 @@
+@@ -911,7 +933,17 @@
  	if ( sanitized.Length() == 0 || sanitized.Icmp( "default" ) == 0 ) {
  		return "";
  	}
--	if ( sanitized.Icmp( "steamdeck" ) != 0 ) {
+-	if ( sanitized.Icmp( "steamdeck" ) != 0 && sanitized.Icmp( "couch" ) != 0 ) {
 +	// Allowlist, so a stray com_platformProfile cannot make the engine exec an
 +	// arbitrary file name from the search path.
-+	static const char *const kKnownProfiles[] = { "steamdeck", "ios" };
++	static const char *const kKnownProfiles[] = { "steamdeck", "couch", "ios" };
 +	bool known = false;
 +	for ( int i = 0; i < (int)( sizeof( kKnownProfiles ) / sizeof( kKnownProfiles[0] ) ); i++ ) {
 +		if ( sanitized.Icmp( kKnownProfiles[i] ) == 0 ) {
@@ -71,7 +71,7 @@
  		return "";
  	}
  
-@@ -1014,6 +1046,16 @@
+@@ -1140,6 +1172,16 @@
  		return;
  	}
  
@@ -88,7 +88,7 @@
  	// echo to console buffer
  	console->Print( msg );
  
-@@ -1128,6 +1170,13 @@
+@@ -1256,6 +1298,13 @@
  	va_start( argptr, fmt );
  	VPrintf( fmt, argptr );
  	va_end( argptr );
@@ -102,7 +102,7 @@
  }
  
  /*
-@@ -1323,6 +1372,20 @@
+@@ -1451,6 +1500,20 @@
  ==================
  */
  void idCommonLocal::Error( const char *fmt, ... ) {
@@ -123,7 +123,7 @@
  	va_list		argptr;
  	static int	lastErrorTime;
  	static int	errorCount;
-@@ -1450,6 +1513,16 @@
+@@ -1578,6 +1641,16 @@
  ==================
  */
  void idCommonLocal::FatalError( const char *fmt, ... ) {
@@ -140,7 +140,7 @@
  	va_list		argptr;
  
  	// if we got a recursive error, make it fatal
-@@ -4208,8 +4281,51 @@
+@@ -4330,8 +4403,51 @@
  	}
  }
  
@@ -192,7 +192,7 @@
  Com_ReloadEngine_f
  =================
  */
-@@ -4222,7 +4338,13 @@
+@@ -4344,7 +4460,13 @@
  
  	if ( args.Argc() > 1 && idStr::Icmp( args.Argv( 1 ), "menu" ) == 0 ) {
  		menu = true;
@@ -206,7 +206,7 @@
  
  	common->Printf( "============= ReloadEngine start =============\n" );
  	fileSystem->SetIsFileLoadingAllowed( true );
-@@ -4262,6 +4384,13 @@
+@@ -4393,6 +4515,13 @@
  		Com_ReloadEngine_f( args );
  		return;
  	}
@@ -220,7 +220,7 @@
  	const idStr previousModule = cvarSystem->GetCVarString( "com_activeGameModule" );
  
  	common->Printf( "============= ReloadGameModule start =============\n" );
-@@ -6433,6 +6562,16 @@
+@@ -6720,6 +6849,16 @@
  		return;
  	}
  
@@ -237,7 +237,7 @@
  	if ( Common_IsEnvFlagTrue( Common_GetNonEmptyEnv( "OPENQ4_DISABLE_STEAMDECK_AUTODETECT" ) ) ||
  		 Common_IsEnvFlagTrue( Common_GetNonEmptyEnv( "OPENQ4_NO_STEAMDECK_AUTODETECT" ) ) ) {
  		Printf( "Steam Deck platform profile auto-detection disabled by environment.\n" );
-@@ -6561,7 +6700,22 @@
+@@ -6850,7 +6989,22 @@
  		Sys_FormatMemoryMB( vidRam ).c_str(),
  		( oldCard ) ? "a less than optimal video architecture" : "an optimal video architecture" );
  
@@ -261,7 +261,27 @@
  	Printf( "%s", Common_MachineSpecQualificationMessage( machineSpec ) );
  	com_machineSpec.SetInteger( machineSpec );
  	com_videoRam.SetInteger( vidRam );
-@@ -6902,8 +7056,35 @@
+@@ -6918,11 +7072,19 @@
+ 
+ #ifndef ID_DEDICATED
+ 		// The splash must respect launch settings before creating any visible window.
++#if defined( __APPLE__ ) && TARGET_OS_IPHONE
++		// openQ4-ios: no splash. UIKit permits exactly ONE window per display,
++		// and the splash would take it — the renderer's own SDL_CreateWindow
++		// then fails with "Only one window allowed per display". iOS shows its
++		// launch screen from the bundle anyway (the old 0002 guard, moved here
++		// with upstream's call in v0.14).
++#else
+ 		if ( !cvarSystem->GetCVarBool( "r_hiddenWindow" ) && !com_skipRenderer.GetBool() &&
+ 			!idAsyncNetwork::serverDedicated.GetInteger() && !cvarSystem->GetCVarBool( "win_viewlog" ) ) {
+ 			Sys_ShowSplash();
+ 		}
+ #endif
++#endif
+ 
+ 		if ( !idAsyncNetwork::serverDedicated.GetInteger() && Sys_AlreadyRunning() ) {
+ 			Sys_Quit();
+@@ -7219,8 +7381,35 @@
  		SetMachineSpec();
  		Com_ExecMachineSpec_f( args );
  		repairedUnsetMachineSpec = true;
@@ -297,19 +317,3 @@
  	Common_MigrateLegacyConsoleAllowCVar();
  
  	// Unconditional, because the "This system qualifies for ..." banner above
-@@ -6986,7 +7167,15 @@
- 	if ( sysDetect ) {
- 		SetMachineSpec();
- 		Com_ExecMachineSpec_f( args );
-+#if defined( __APPLE__ ) && TARGET_OS_IPHONE
-+		// A phone has two speakers. Requesting 5.1 makes openal-soft build a
-+		// six-channel mixer that is downmixed to stereo anyway, and on this
-+		// device it is what makes EFX setup fail with AL_OUT_OF_MEMORY —
-+		// silently disabling reverb, which the charter wants audible.
-+		cvarSystem->SetCVarInteger( "s_numberOfSpeakers", 2 );
-+#else
- 		cvarSystem->SetCVarInteger( "s_numberOfSpeakers", 6 );
-+#endif
- 		cmdSystem->BufferCommandText( CMD_EXEC_NOW, "s_restart\n" );
- 		cmdSystem->ExecuteCommandBuffer();
- 	}

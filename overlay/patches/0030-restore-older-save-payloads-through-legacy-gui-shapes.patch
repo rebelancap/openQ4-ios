@@ -1,0 +1,116 @@
+--- a/src/ui/UserInterface.cpp
++++ b/src/ui/UserInterface.cpp
+@@ -1602,7 +1602,68 @@
+ 	desktop->WriteToSaveGame( savefile );
+ 	return true;
+ }
++
++/*
++===============================================================================
++
++	Legacy GUI shapes for older save payloads (openQ4-ios D-116)
++
++	A GUI's save blob is its desktop's window tree written field by field with
++	no lengths or names to resynchronise on, so idWindow::ReadFromSaveGame can
++	only read it back against the SAME tree that wrote it. When a pak0 GUI that
++	is saved with the game changes shape (v0.14 added hit_indicator_reduced to
++	guis/hud.gui and guis/hud_strogg.gui), every save written before the change
++	desyncs mid-restore. Each entry below names the file that wrote such saves:
++	the blob is read into a throwaway GUI parsed from it, which consumes it
++	exactly, and the live GUI is re-initialised from its current file and given
++	the saved state dictionary (the gui:: values the game and its scripts set).
++	Lost: in-flight transitions and window-local script state, which the HUD
++	rebuilds within a frame from the player's state. Add an entry whenever a
++	saved GUI changes shape; the payload version is the one that first wrote
++	the NEW shape.
+ 
++===============================================================================
++*/
++idCVar ui_legacySaveShapes( "ui_legacySaveShapes", "1", CVAR_GUI | CVAR_BOOL,
++	"restore GUIs from older save payloads through their legacy GUI files (0 = read the blob against the current file, as upstream does)" );
++
++struct uiLegacySaveShape_t {
++	const char *	gui;			// the GUI the game saved
++	int				belowPayload;	// payloads older than this wrote the legacy shape
++	const char *	legacyFile;		// that GUI as it was when those payloads were written
++};
++
++static const uiLegacySaveShape_t ui_legacySaveShapes_table[] = {
++	{ "guis/hud.gui",			4,	"guis/savecompat/payload3/hud.gui" },
++	{ "guis/hud_strogg.gui",	4,	"guis/savecompat/payload3/hud_strogg.gui" },
++};
++
++// The payload version of the save being restored; 0 outside a restore, or for
++// payloads with no version stamp. Set by the session around the game restore.
++static int ui_restorePayloadVersion = 0;
++
++void UI_SetSaveGameRestorePayloadVersion( int payloadVersion ) {
++	ui_restorePayloadVersion = payloadVersion;
++}
++
++static const char *UI_LegacySaveShapeFor( const char *gui ) {
++	if ( ui_restorePayloadVersion <= 0 || gui == NULL || !ui_legacySaveShapes.GetBool() ) {
++		return NULL;
++	}
++	for ( int i = 0; i < static_cast<int>( sizeof( ui_legacySaveShapes_table ) / sizeof( ui_legacySaveShapes_table[0] ) ); i++ ) {
++		const uiLegacySaveShape_t &shape = ui_legacySaveShapes_table[i];
++		if ( ui_restorePayloadVersion < shape.belowPayload && idStr::Icmp( gui, shape.gui ) == 0 ) {
++			if ( fileSystem->ReadFile( shape.legacyFile, NULL, NULL ) <= 0 ) {
++				common->Warning( "GUI save restore: %s from payload %d needs %s, which is not installed - reading it against the current file",
++					gui, ui_restorePayloadVersion, shape.legacyFile );
++				return NULL;
++			}
++			return shape.legacyFile;
++		}
++	}
++	return NULL;
++}
++
+ static bool UI_ReadSaveGameBytes( idFile *savefile, void *buffer, int len, const char *detail ) {
+ 	const int offset = savefile->Tell();
+ 	const int bytesRead = savefile->Read( buffer, len );
+@@ -1760,7 +1821,43 @@
+ 	activateStr = restoredActivateStr;
+ 	pendingCmd = restoredPendingCmd;
+ 	returnCmd = restoredReturnCmd;
+-	desktop->ReadFromSaveGame( savefile );
++	const char *legacyFile = UI_LegacySaveShapeFor( source.c_str() );
++	if ( legacyFile != NULL ) {
++		// D-116: consume the blob with the tree that wrote it. A desync in the
++		// legacy file throws exactly as the stock path does.
++		const int blobStart = savefile->Tell();
++		idUserInterfaceLocal *shape = new idUserInterfaceLocal( false );
++		try {
++			shape->InitFromFile( legacyFile, true, false );
++			if ( shape->desktop == NULL ) {
++				common->Error( "GUI save restore: legacy shape %s did not parse", legacyFile );
++			}
++			shape->state = restoredState;
++			shape->desktop->ReadFromSaveGame( savefile );
++		} catch ( ... ) {
++			delete shape;
++			throw;
++		}
++		delete shape;
++
++		// The live GUI may still carry a previous level's window state (cached
++		// GUIs outlive a load): give it a fresh tree from its current file, then
++		// the saved dictionary and flags again, which InitFromFile touched.
++		const idStr currentFile = source;
++		InitFromFile( currentFile.c_str() );
++		state = restoredState;
++		active = restoredActive;
++		interactive = restoredInteractive;
++		uniqued = restoredUniqued;
++		time = restoredTime;
++		activateStr = restoredActivateStr;
++		pendingCmd = restoredPendingCmd;
++		returnCmd = restoredReturnCmd;
++		common->Printf( "GUI save restore: %s from payload %d read through %s (%d bytes); window-local state reset\n",
++			currentFile.c_str(), ui_restorePayloadVersion, legacyFile, savefile->Tell() - blobStart );
++	} else {
++		desktop->ReadFromSaveGame( savefile );
++	}
+ 	SetCursor( restoredCursorX, restoredCursorY );
+ 
+ 	return true;

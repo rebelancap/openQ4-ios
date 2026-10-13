@@ -24,7 +24,7 @@
 # function of pristine upstream at the pin and nothing else.
 #
 #   project-root     vendor/openQ4        (NOT build/src-ios)
-#   game-stage-root  vendor/openQ4-game   (NOT .tmp/gamelibs_stage)
+#   game-stage-root  vendor/openQ4        (game sources in-tree since v0.14, D-116)
 #   generator        vendor/openQ4's own copy, so the tool is pristine too
 #
 # Both vendor trees are clean shallow clones at the pin, so this is
@@ -42,7 +42,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENGINE="$ROOT/vendor/openQ4"
-GAME="$ROOT/vendor/openQ4-game"
+GAME="$ENGINE"   # in-tree since v0.14.000 (D-116); upstream meson passes the project root too
 GEN="$ROOT/build/ios-gen"
 STAMP="$ROOT/overlay/savegame-stamp.txt"
 HEADER="$GEN/openq4_savegame_compat_generated.h"
@@ -52,7 +52,7 @@ PRINT_HASH=0
 [ "${1:-}" = "--print-hash" ] && PRINT_HASH=1
 
 [ -f "$GENERATOR" ] || { echo "FATAL: missing $GENERATOR (is vendor/openQ4 populated?)" >&2; exit 1; }
-[ -d "$GAME/src/game" ] || { echo "FATAL: missing $GAME/src/game (is vendor/openQ4-game populated?)" >&2; exit 1; }
+[ -d "$GAME/src/game" ] || { echo "FATAL: missing $GAME/src/game (pin predates in-tree game sources?)" >&2; exit 1; }
 [ -f "$STAMP" ] || { echo "FATAL: missing $STAMP — the recorded savegame stamp is not optional" >&2; exit 1; }
 
 # First non-empty, non-comment line. Anything else in the file is prose for
@@ -90,13 +90,13 @@ itself is almost certainly unchanged; this is a fingerprint over source files.
 If UPSTREAM.pin just moved, this is expected: record the new value with
 
     sed -n 's/.*SOURCE_HASH "\\(.*\\)"\$/\\1/p' <(python3 vendor/openQ4/tools/build/generate_savegame_compat_header.py \\
-        --project-root vendor/openQ4 --game-stage-root vendor/openQ4-game --header-out /dev/stdout)
+        --project-root vendor/openQ4 --game-stage-root vendor/openQ4 --header-out /dev/stdout)
 
 i.e. put $GOT into overlay/savegame-stamp.txt, and say in the OTA notes that
 saves from earlier builds will not load.
 
 If UPSTREAM.pin did NOT move, something is wrong and must not be papered over:
-a dirty vendor tree (\`git -C vendor/openQ4 status\`, same for vendor/openQ4-game
+a dirty vendor tree (\`git -C vendor/openQ4 status\`
 — hand edits under vendor/ are forbidden by ground rule 1), a partial clone, or
 a change to upstream's generator. Fix the cause, do not update the stamp.
 EOF

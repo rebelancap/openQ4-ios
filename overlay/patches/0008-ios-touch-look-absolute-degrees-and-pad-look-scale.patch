@@ -1,8 +1,8 @@
 --- a/src/framework/UsercmdGen.cpp
 +++ b/src/framework/UsercmdGen.cpp
-@@ -32,6 +32,13 @@
- #include "Session_local.h"
- #include "../idlib/NumericString.h"
+@@ -37,6 +37,13 @@
+ #include "../sys/android/android_public.h"
+ #endif
  
 +#if defined( __APPLE__ )
 +#include <TargetConditionals.h>
@@ -14,7 +14,7 @@
  static const float MOUSE_CPI_INCHES_PER_CM = 2.5399999618530273f;
  static const float MOUSE_CPI_VIEW_SCALE = 45.45454545454546f;
  static const int MOUSE_FILTER_SAMPLES = 32;
-@@ -386,6 +393,13 @@
+@@ -415,6 +422,13 @@
  	void			KeyMove( void );
  	void			JoystickMove( void );
  	void			MouseMove( void );
@@ -28,7 +28,7 @@
  	float			NormalizeMouseDeltasForCpi( float &mx, float &my, float &strafeMx, float &strafeMy ) const;
  	float			CalculateMouseSensitivity( float mx, float my, float *debugRate, float *debugPower ) const;
  	float			GetZoomLookSensitivityScale( void ) const;
-@@ -469,6 +483,32 @@
+@@ -516,6 +530,32 @@
  idCVar idUsercmdGenLocal::in_angleSpeedKey( "in_anglespeedkey", "1.5", CVAR_SYSTEM | CVAR_ARCHIVE | CVAR_FLOAT, "angle change scale when holding down _speed button" );
  idCVar idUsercmdGenLocal::in_freeLook( "in_freeLook", "1", CVAR_SYSTEM | CVAR_ARCHIVE | CVAR_BOOL, "look around with mouse (reverse _mlook button)" );
  idCVar idUsercmdGenLocal::in_alwaysRun( "in_alwaysRun", "1", CVAR_SYSTEM | CVAR_ARCHIVE | CVAR_BOOL, "always run (reverse _speed button)" );
@@ -61,13 +61,15 @@
  static idCVar in_runDefaultMigrated( "in_runDefaultMigrated", "0", CVAR_SYSTEM | CVAR_ARCHIVE | CVAR_BOOL, "one-time migration flag for legacy openQ4 run defaults" );
  idCVar idUsercmdGenLocal::in_toggleRun( "in_toggleRun", "0", CVAR_SYSTEM | CVAR_ARCHIVE | CVAR_BOOL, "pressing _speed button toggles run on/off - only in MP" );
  idCVar idUsercmdGenLocal::in_toggleCrouch( "in_toggleCrouch", "0", CVAR_SYSTEM | CVAR_ARCHIVE | CVAR_BOOL, "pressing _movedown button toggles player crouching/standing" );
-@@ -1052,8 +1092,155 @@
- 	EndMouseFilter();
- }
+@@ -1097,8 +1137,155 @@
+ 	}
  
+ 	EndMouseFilter();
++}
++
 +#if defined( __APPLE__ ) && TARGET_OS_IPHONE
 +
- /*
++/*
 +=================
 +Touch look
 +
@@ -86,7 +88,7 @@
 +display-link rate while usercmds are generated on the tic clock, and it
 +accumulates rather than overwrites so that every touch sample inside one 60 Hz
 +tic contributes instead of the last one winning.
- =================
++=================
 +*/
 +static std::atomic<float> s_touchLookYaw( 0.0f );
 +static std::atomic<float> s_touchLookPitch( 0.0f );
@@ -184,8 +186,8 @@
 +			return;
 +		}
 +	}
-+}
-+
+ }
+ 
 +void idUsercmdGenLocal::TouchMove( bool apply ) {
 +	const float forward = s_touchMoveForward.load( std::memory_order_relaxed );
 +	const float right = s_touchMoveRight.load( std::memory_order_relaxed );
@@ -212,14 +214,12 @@
 +
 +#endif	// __APPLE__ && TARGET_OS_IPHONE
 +
-+/*
-+=================
- idUsercmdGenLocal::JoystickMove
+ /*
  =================
- */
-@@ -1087,11 +1274,50 @@
+ idUsercmdGenLocal::JoystickMove
+@@ -1162,11 +1349,52 @@
+ 		joystickLookSensitivity = 1.0f;
  	}
- 	joystickLookSensitivity = idMath::ClampFloat( 0.1f, 4.0f, joystickLookSensitivity ) * GetZoomLookSensitivityScale();
  
 -	if ( hasDedicatedLookAxis || !ButtonState( UB_STRAFE ) ) {
 +	if ( ButtonState( UB_WEAPONWHEEL ) ) {
@@ -262,16 +262,18 @@
 +	} else if ( hasDedicatedLookAxis || !ButtonState( UB_STRAFE ) ) {
  		// positive axis values mean stick right/down; turning right decreases yaw and
  		// looking down increases pitch, matching the mouse and keyboard handling above
--		viewangles[YAW] -= anglespeed * in_yawSpeed.GetFloat() * joystickLookSensitivity * lookAxisX;
--		viewangles[PITCH] += anglespeed * in_pitchSpeed.GetFloat() * joystickLookSensitivity * lookAxisY;
-+		const float padScaleX = idMath::ClampFloat( 0.1f, 4.0f, in_padLookScaleX.GetFloat() );
-+		const float padScaleY = idMath::ClampFloat( 0.1f, 4.0f, in_padLookScaleY.GetFloat() );
-+		viewangles[YAW] -= anglespeed * in_yawSpeed.GetFloat() * joystickLookSensitivity * padScaleX * lookAxisX;
-+		viewangles[PITCH] += anglespeed * in_pitchSpeed.GetFloat() * joystickLookSensitivity * padScaleY * lookAxisY;
+-		viewangles[YAW] -= anglespeed * ( weaponWheel ? 140.0f : in_yawSpeed.GetFloat() ) * joystickLookSensitivity * lookAxisX;
+-		viewangles[PITCH] += anglespeed * ( weaponWheel ? 140.0f : in_pitchSpeed.GetFloat() ) * joystickLookSensitivity * lookAxisY;
++		// openQ4-ios: the per-axis pad look scale (D-109) applies to looking,
++		// not to upstream's fixed-rate weapon-wheel steering.
++		const float padScaleX = weaponWheel ? 1.0f : idMath::ClampFloat( 0.1f, 4.0f, in_padLookScaleX.GetFloat() );
++		const float padScaleY = weaponWheel ? 1.0f : idMath::ClampFloat( 0.1f, 4.0f, in_padLookScaleY.GetFloat() );
++		viewangles[YAW] -= anglespeed * ( weaponWheel ? 140.0f : in_yawSpeed.GetFloat() ) * joystickLookSensitivity * padScaleX * lookAxisX;
++		viewangles[PITCH] += anglespeed * ( weaponWheel ? 140.0f : in_pitchSpeed.GetFloat() ) * joystickLookSensitivity * padScaleY * lookAxisY;
  	}
  
  	if ( hasDedicatedLookAxis ) {
-@@ -1217,6 +1443,12 @@
+@@ -1299,6 +1527,12 @@
  		// get basic movement from joystick
  		JoystickMove();
  
@@ -284,7 +286,7 @@
  		// check to make sure the angles haven't wrapped
  		if ( viewangles[PITCH] - oldAngles[PITCH] > 90 ) {
  			viewangles[PITCH] = oldAngles[PITCH] + 90;
-@@ -1226,6 +1458,10 @@
+@@ -1322,6 +1556,10 @@
  	} else {
  		mouseDx = 0;
  		mouseDy = 0;
@@ -295,7 +297,7 @@
  	}
  
  	for ( i = 0; i < 3; i++ ) {
-@@ -1658,3 +1894,58 @@
+@@ -1943,7 +2181,61 @@
  	cmd.impulse = impulse;
  	cmd.flags = flags;
  }
@@ -303,7 +305,7 @@
 +/*
 +=================
 +iOS direct touch on in-world GUIs — the transport (openQ4-ios D-071)
-+
+ 
 +The game module decides which panel a tap lands on, because `idPlayer::UpdateFocus`
 +owns the focus ray and lives in the separate `openQ4-game` dylib. The shell cannot
 +call into that dylib (the game API is fixed and one-directional), so the touch
@@ -354,3 +356,6 @@
 +extern "C" void OpenQ4_iOS_SetTouchAimClick( int down ) {
 +	in_touchAimClick.SetBool( down != 0 );
 +}
+ #ifdef __ANDROID__
+ /*
+ ================

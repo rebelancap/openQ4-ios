@@ -320,6 +320,7 @@
 "Cannot Load Save" = "Chargement impossible";
 /* #str_200245 + MT */
 "This save was made by an older version of openQ4 and cannot be restored. Start %s again from the beginning, with the weapons and armor you had? This replaces the level's autosave; a copy of it is kept in the list." = "Cette sauvegarde a été créée par une ancienne version d'openQ4 et ne peut pas être restaurée. Recommencer %s depuis le début, avec les armes et l'armure que vous aviez ? Cela remplace la sauvegarde automatique du niveau ; une copie en est conservée dans la liste.";
+"This save could not be restored. Start %s again from the beginning, with the weapons and armor you had? This replaces the level's autosave; a copy of it is kept in the list." = "Cette sauvegarde n'a pas pu être restaurée. Recommencer %s depuis le début, avec les armes et l'armure que vous aviez ? Cela remplace la sauvegarde automatique du niveau ; une copie en est conservée dans la liste.";
 "Before restart" = "Avant redémarrage";
 "The level was not restarted: a copy of its autosave could not be kept, so nothing was changed. If Load Game already lists nine \"Before restart\" copies of this level, delete one and try again." = "Le niveau n'a pas été redémarré : une copie de sa sauvegarde automatique n'a pas pu être conservée, donc rien n'a été modifié. Si Charger une partie affiche déjà neuf copies « Avant redémarrage » de ce niveau, supprimez-en une et réessayez.";
 /* #str_200245 + MT */

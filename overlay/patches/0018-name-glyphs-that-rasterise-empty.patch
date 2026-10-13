@@ -1,6 +1,6 @@
 --- a/src/renderer/tr_fontTTF.cpp
 +++ b/src/renderer/tr_fontTTF.cpp
-@@ -708,12 +708,33 @@
+@@ -783,12 +783,33 @@
  	int tallest = 0;
  	int rendered = 0;
  
@@ -34,7 +34,7 @@
  			continue;
  		}
  		rasters[i].advance = metrics.advance;
-@@ -725,9 +746,15 @@
+@@ -800,9 +821,15 @@
  			continue;
  		}
  		if ( !face.RasterizeGlyph( glyphIndex, scale, rasters[i].bitmap ) ) {
@@ -50,7 +50,7 @@
  			continue;
  		}
  
-@@ -739,6 +766,12 @@
+@@ -814,6 +841,12 @@
  		rendered++;
  	}
  

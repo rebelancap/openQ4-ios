@@ -1,25 +1,23 @@
 --- a/src/renderer/RendererModule.cpp
 +++ b/src/renderer/RendererModule.cpp
-@@ -21,7 +21,17 @@
+@@ -25,7 +25,15 @@
  // every build shape, including module-only clients that shed the static
  // renderer sources
- static const char *r_renderApiArgs[] = { "best", "gl", "vulkan", "gl-module", NULL };
--idCVar r_renderApi( "r_renderApi", "gl", CVAR_RENDERER | CVAR_ARCHIVE, "rendering API: best = platform default (currently gl), gl = OpenGL renderer (loaded as the renderer-gl module on module-only builds, statically linked elsewhere), vulkan = native Vulkan renderer module (bring-up; falls back to gl), gl-module = alias that always selects the OpenGL module. Module selections take effect on engine restart.", r_renderApiArgs, idCmdSystem::ArgCompletion_String<r_renderApiArgs> );
+ static const char *r_renderApiArgs[] = { "best", "gl", "vulkan", "gl-module", "gles", NULL };
+-#ifdef __ANDROID__
++#ifdef OPENQ4_RENDERER_MODULE_STATIC
 +// iOS ships exactly one renderer. The GL backend needs a desktop compatibility
 +// profile and ARB2 assembly programs from the retail paks, neither of which
 +// exists on this platform, so "gl" is not a fallback there — it is a dead end.
 +// Defaulting to vulkan makes the only working path the default one; a stale
 +// archived "gl" in a user config would otherwise fatal at startup.
-+#ifdef OPENQ4_RENDERER_MODULE_STATIC
-+	#define OPENQ4_DEFAULT_RENDER_API "vulkan"
-+#else
-+	#define OPENQ4_DEFAULT_RENDER_API "gl"
-+#endif
-+idCVar r_renderApi( "r_renderApi", OPENQ4_DEFAULT_RENDER_API, CVAR_RENDERER | CVAR_ARCHIVE, "rendering API: best = platform default (currently gl), gl = OpenGL renderer (loaded as the renderer-gl module on module-only builds, statically linked elsewhere), vulkan = native Vulkan renderer module (bring-up; falls back to gl), gl-module = alias that always selects the OpenGL module. Module selections take effect on engine restart.", r_renderApiArgs, idCmdSystem::ArgCompletion_String<r_renderApiArgs> );
- idCVar r_actualRenderApi( "r_actualRenderApi", "UNINITIALIZED", CVAR_RENDERER | CVAR_ROM, "rendering API actually active after request/fallback selection" );
- 
- // engine-side homes for window/gui cvars referenced by both the platform
-@@ -33,10 +43,16 @@
++#define OPENQ4_DEFAULT_RENDER_API	"vulkan"
++static const rendererModuleApi_t rm_platformDefaultApi = RENDER_MODULE_API_VULKAN;
++#elif defined( __ANDROID__ )
+ // Android has no desktop GL at all; the ES module is the only renderer built.
+ #define OPENQ4_DEFAULT_RENDER_API	"gles"
+ static const rendererModuleApi_t rm_platformDefaultApi = RENDER_MODULE_API_GLES;
+@@ -45,10 +53,16 @@
  idCVar r_windowHeight( "r_windowHeight", "720", CVAR_RENDERER | CVAR_ARCHIVE | CVAR_INTEGER, "windowed mode height" );
  idCVar r_skipGuiShaders( "r_skipGuiShaders", "0", CVAR_RENDERER | CVAR_INTEGER, "1 = skip all gui elements on surfaces, 2 = skip drawing but still handle events, 3 = draw but skip events", 0, 3, idCmdSystem::ArgCompletion_Integer<0,3> );
  
@@ -37,7 +35,7 @@
  idRenderSystem *		renderSystem = NULL;
  idRenderModelManager *	renderModelManager = NULL;
  #endif
-@@ -497,6 +513,13 @@
+@@ -634,6 +648,13 @@
  candidate is now the active renderer path.
  ====================
  */
@@ -51,7 +49,7 @@
  static bool RM_TryLoadModuleApi( rendererModuleApi_t api, rendererModuleStatus_t &status ) {
  #ifndef OPENQ4_RENDERER_MODULE_ONLY
  	if ( api == RENDER_MODULE_API_GL ) {
-@@ -528,6 +551,18 @@
+@@ -663,6 +684,18 @@
  	}
  	idStr::Copynz( status.modulePath, modulePath, sizeof( status.modulePath ) );
  
@@ -70,7 +68,7 @@
  	common->Printf( "Loading renderer module: api='%s' path='%s'\n", R_RendererModule_ApiName( api ), modulePath );
  	intptr_t handle = Sys_DLL_Load( modulePath );
  	if ( handle == 0 ) {
-@@ -543,6 +578,7 @@
+@@ -680,6 +713,7 @@
  		RM_AppendFallbackReason( status, "missing GetRenderAPI entry point" );
  		return false;
  	}
@@ -78,10 +76,10 @@
  
  	renderImport_t moduleImport;
  	RM_BuildImport( moduleImport );
-@@ -588,7 +624,26 @@
- 		return;
- 	}
+@@ -755,7 +789,26 @@
  
+ 	const bool retryStartup = rm_state.startupRetryPending;
+ 	const rendererModuleStatus_t failedStatus = status;
 +#ifdef OPENQ4_RENDERER_MODULE_STATIC
 +	// The one-shot activation window exists because a dlopen'd module would be
 +	// unloaded and re-loaded here, leaving module-side static cvars whose
@@ -100,8 +98,23 @@
 +	// nothing for a re-activation to get wrong.
 +	rm_state.activationAllowed = true;
 +#else
- 	rm_state.activationAllowed = !rm_state.everBooted;
+ 	rm_state.activationAllowed = !rm_state.everBooted || retryStartup;
 +#endif
  	rm_state.everBooted = true;
  
- 	RM_UnloadModule();
+ 	if (!RM_UnloadModule()) return;
+@@ -839,6 +892,14 @@
+ }
+ 
+ bool R_RendererModule_RetryFailedStartup( void ) {
++#ifdef OPENQ4_RENDERER_MODULE_STATIC
++	// v0.14 retries a failed Vulkan startup on OpenGL. iOS has no GL renderer
++	// (charter: a VK init failure is a loud fatal, never a fallback), so refuse:
++	// the caller turns false into a FatalError, after printing the reason here.
++	common->Printf( "Renderer startup recovery: refused on this platform (Vulkan is the only renderer): %s\n",
++			rm_state.status.fallbackReason );
++	return false;
++#endif
+ 	if ( !rm_state.startupDeviceFailed || rm_state.status.activeApi != RENDER_MODULE_API_VULKAN
+ 			|| !rm_state.interfacesPublished ) {
+ 		return false;

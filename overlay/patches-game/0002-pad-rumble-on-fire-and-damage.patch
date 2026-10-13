@@ -1,6 +1,6 @@
 --- a/src/game/PlayerView.cpp
 +++ b/src/game/PlayerView.cpp
-@@ -239,7 +239,26 @@
+@@ -245,7 +245,26 @@
  	return oldest;
  }
  
@@ -27,7 +27,7 @@
  ==============
  idPlayerView::DamageImpulse
  
-@@ -250,6 +269,12 @@
+@@ -256,6 +275,12 @@
  // RAVEN BEGIN
  // jnewquist: Controller rumble
  void idPlayerView::DamageImpulse( idVec3 localKickDir, const idDict *damageDef, int damage, const char *damageDefName ) {
@@ -40,7 +40,7 @@
  
  	//
  	// double vision effect
-@@ -479,6 +504,14 @@
+@@ -485,6 +510,14 @@
  	int		recoilTime;
  
  	recoilTime = weaponDef->GetInt( "recoilTime" );
@@ -57,7 +57,7 @@
  		idAngles angles;
 --- a/src/mpgame/PlayerView.cpp
 +++ b/src/mpgame/PlayerView.cpp
-@@ -279,7 +279,26 @@
+@@ -285,7 +285,26 @@
  	return oldest;
  }
  
@@ -84,7 +84,7 @@
  ==============
  idPlayerView::DamageImpulse
  
-@@ -290,6 +309,12 @@
+@@ -296,6 +315,12 @@
  // RAVEN BEGIN
  // jnewquist: Controller rumble
  void idPlayerView::DamageImpulse( idVec3 localKickDir, const idDict *damageDef, int damage, const char *damageDefName ) {
@@ -97,7 +97,7 @@
  	//
  	// double vision effect
  	//
-@@ -515,6 +540,14 @@
+@@ -521,6 +546,14 @@
  	int		recoilTime;
  
  	recoilTime = weaponDef->GetInt( "recoilTime" );

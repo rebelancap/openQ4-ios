@@ -320,6 +320,7 @@
 "Cannot Load Save" = "Imposible cargar";
 /* #str_200245 + MT */
 "This save was made by an older version of openQ4 and cannot be restored. Start %s again from the beginning, with the weapons and armor you had? This replaces the level's autosave; a copy of it is kept in the list." = "Esta partida guardada se creó con una versión anterior de openQ4 y no se puede restaurar. ¿Empezar %s de nuevo desde el principio, con las armas y la armadura que tenías? Esto reemplaza el guardado automático del nivel; se conserva una copia en la lista.";
+"This save could not be restored. Start %s again from the beginning, with the weapons and armor you had? This replaces the level's autosave; a copy of it is kept in the list." = "No se pudo restaurar esta partida guardada. ¿Empezar %s de nuevo desde el principio, con las armas y la armadura que tenías? Esto reemplaza el guardado automático del nivel; se conserva una copia en la lista.";
 "Before restart" = "Antes de reiniciar";
 "The level was not restarted: a copy of its autosave could not be kept, so nothing was changed. If Load Game already lists nine \"Before restart\" copies of this level, delete one and try again." = "No se reinició el nivel: no se pudo conservar una copia de su autoguardado, así que no se cambió nada. Si Cargar partida ya muestra nueve copias \"Antes de reiniciar\" de este nivel, elimina una y vuelve a intentarlo.";
 /* #str_200245 + MT */

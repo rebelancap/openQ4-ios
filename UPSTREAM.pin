@@ -1,26 +1,27 @@
-# openQ4 upstream pins — the engine and game repos are pinned AS A PAIR.
-# The game API version couples them; never bump one alone.
-# Bump procedure: scripts/bump-pin.sh <tag> — moves both vendor clones and the
+# openQ4 upstream pin — engine and game modules are pinned AS A PAIR (the game
+# API version couples them). Since v0.14.000 upstream keeps the SP/MP game
+# sources in-tree (src/game, src/mpgame), so the pair is ONE commit and the
+# OPENQ4_GAME_* keys equal the engine's (D-116); fetch-vendor.sh asserts it.
+# Bump procedure: scripts/bump-pin.sh <tag> — moves the vendor clone and the
 # macOS oracle, rebuilds the oracle's baseoq4 packs, rewrites the key lines
 # below and re-applies the overlay (failing loudly on any patch that no longer
-# applies). See DECISIONS.md D-001 and D-110.
+# applies). See DECISIONS.md D-001, D-110 and D-116.
 
 OPENQ4_REPO=https://github.com/themuffinator/openQ4
-OPENQ4_REF=v0.13.2
-OPENQ4_COMMIT=fcdd56967135fbbdfb1688e2d25533f8f123b1c6
-OPENQ4_DATE=2026-09-14
-OPENQ4_DESC=Stop a gui var transition aborting the save that catches it
+OPENQ4_REF=v0.14.000
+OPENQ4_COMMIT=1621aa21534e75a1c0ade3fd480c00bcd8f378ee
+OPENQ4_DATE=2026-10-12
+OPENQ4_DESC=Bound Android packaging memory and avoid recompressing PK4 archives
 
-OPENQ4_GAME_REPO=https://github.com/themuffinator/openQ4-game
-OPENQ4_GAME_COMMIT=8f411dbc38efcb0f5f63b1c300ab220beb73808c
-OPENQ4_GAME_DATE=2026-09-13
+OPENQ4_GAME_REPO=https://github.com/themuffinator/openQ4
+OPENQ4_GAME_COMMIT=1621aa21534e75a1c0ade3fd480c00bcd8f378ee
+OPENQ4_GAME_DATE=2026-10-12
 
-# Pin rationale (D-110): pinned to a release TAG, as the charter prefers.
-# openQ4-game has no tags; the companion commit is the OPENQ4_GAMELIBS_SHA the
-# tagged engine commit's own CI builds against
-# (.github/workflows/push-verification.yml), which for a release tag is also the
-# revision the release workflow resolved and shipped (cross-checked against the
-# release run's log). bump-pin.sh reads it from there unless given explicitly.
+# Pin rationale (D-116): pinned to the release TAG v0.14.000, as the charter
+# prefers. The game half is the same commit: upstream's release workflow run
+# 38297252865 logs "In-tree game resolved SHA: 1621aa21…" for every platform.
 #
 # History: D-001/D-003 pinned 227ee810 (main, past v0.9.0) for the Arena
-# Campaign; D-110 moved to v0.13.2.
+# Campaign; D-110 moved to v0.13.2 + openQ4-game 8f411dbc (two repos, paired
+# through upstream CI's OPENQ4_GAMELIBS_SHA); D-116 moved to v0.14.000, where
+# the game repo was imported in-tree.

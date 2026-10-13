@@ -1,6 +1,6 @@
 --- a/src/sound/OpenAL/AL_SoundVoice.cpp
 +++ b/src/sound/OpenAL/AL_SoundVoice.cpp
-@@ -1512,9 +1512,33 @@
+@@ -1631,9 +1631,33 @@
  {
  #if OPENQ4_OPENAL_EFX_SUPPORTED
  	if( !soundSystemLocal.hardware.HasEFXFilters() || !openQ4_LoadVoiceEfxProcs() || !alIsSource( openalSource ) )
@@ -34,7 +34,7 @@
  	if( openalDirectFilter == 0 )
  	{
  		qalGenFilters( 1, &openalDirectFilter );
-@@ -1528,6 +1552,10 @@
+@@ -1647,6 +1671,10 @@
  		else
  		{
  			openalDirectFilter = 0;
@@ -47,7 +47,7 @@
  	if( openalAuxFilter == 0 )
 --- a/src/sound/OpenAL/AL_SoundHardware.cpp
 +++ b/src/sound/OpenAL/AL_SoundHardware.cpp
-@@ -1359,6 +1359,11 @@
+@@ -1658,6 +1658,11 @@
  	}
  	if( s_useEAXReverb.GetBool() && efxExtensionPresent && openQ4_LoadHardwareEfxProcs() )
  	{

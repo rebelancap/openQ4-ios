@@ -177,6 +177,7 @@
 "Old version" = "Old version";
 "Cannot Load Save" = "Cannot Load Save";
 "This save was made by an older version of openQ4 and cannot be restored. Start %s again from the beginning, with the weapons and armor you had? This replaces the level's autosave; a copy of it is kept in the list." = "This save was made by an older version of openQ4 and cannot be restored. Start %s again from the beginning, with the weapons and armor you had? This replaces the level's autosave; a copy of it is kept in the list.";
+"This save could not be restored. Start %s again from the beginning, with the weapons and armor you had? This replaces the level's autosave; a copy of it is kept in the list." = "This save could not be restored. Start %s again from the beginning, with the weapons and armor you had? This replaces the level's autosave; a copy of it is kept in the list.";
 "Before restart" = "Before restart";
 "The level was not restarted: a copy of its autosave could not be kept, so nothing was changed. If Load Game already lists nine \"Before restart\" copies of this level, delete one and try again." = "The level was not restarted: a copy of its autosave could not be kept, so nothing was changed. If Load Game already lists nine \"Before restart\" copies of this level, delete one and try again.";
 "This save was made on a different kind of device and cannot be loaded here." = "This save was made on a different kind of device and cannot be loaded here.";

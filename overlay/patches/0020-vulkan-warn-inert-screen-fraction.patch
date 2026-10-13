@@ -1,6 +1,6 @@
 --- a/src/renderer/RenderSystem.cpp
 +++ b/src/renderer/RenderSystem.cpp
-@@ -1358,6 +1358,69 @@
+@@ -1450,6 +1450,69 @@
  		postProcessSMAAQuality.Set( 0.0f, 0.10f, 8.0f, 2.0f );
  	}
  
@@ -70,7 +70,7 @@
  	// Keep the 2D viewport anchored to a valid region of the current framebuffer.
  	// Platform backends can narrow this to a monitor sub-rect (top-left origin).
  	if ( glConfig.uiViewportWidth <= 0 || glConfig.uiViewportHeight <= 0 ) {
-@@ -1419,7 +1482,31 @@
+@@ -1521,7 +1584,31 @@
  		CropRenderSize( w, h );
  	}
  

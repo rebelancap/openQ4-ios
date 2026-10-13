@@ -79,15 +79,17 @@
  static const int SOUND_SAVEGAME_MAX_EMITTERS = 8192;
  static const int SOUND_SAVEGAME_MAX_TOTAL_CHANNELS = 8192;
  static const int SOUND_DEMO_MAX_CACHED_SOUNDS = 4096;
-@@ -821,7 +893,10 @@
+@@ -873,7 +945,12 @@
  			continue;
  		}
  
 -		const float channelAmplitude = chan->hardwareVoice->GetGain() * chan->currentAmplitude;
 +		// D-112: the shader's own envelope at this moment, not the voice stub's 1.0.
++		// (v0.14 queries camera shake separately — CurrentShakeAmplitude — so
++		// the envelope now shapes the controller rumble only.)
 +		const float envelope = ( chan->parms.shakes != 0.0f || ( chan->parms.soundShaderFlags & SSF_CAUSE_RUMBLE ) != 0 )
 +							   ? SoundChannelShakeEnvelope( chan, currentTime ) : 0.0f;
 +		const float channelAmplitude = chan->hardwareVoice->GetGain() * chan->currentAmplitude * envelope;
- 		shakeAmp += chan->parms.shakes * channelAmplitude;
  
  		float channelRumble = idMath::Fabs( chan->parms.shakes ) * channelAmplitude;
+ 		if( ( chan->parms.soundShaderFlags & SSF_CAUSE_RUMBLE ) != 0 )

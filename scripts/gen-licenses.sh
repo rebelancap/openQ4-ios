@@ -26,7 +26,7 @@ OUT="$ROOT/licenses"
 CHECK=0
 [ "${1:-}" = "--check" ] && CHECK=1
 
-for d in "$V/openQ4" "$V/openQ4-game" "$V/SDL" "$V/openal-soft"; do
+for d in "$V/openQ4" "$V/SDL" "$V/openal-soft"; do
 	[ -d "$d" ] || { echo "FATAL: $d missing — run scripts/fetch-vendor.sh and scripts/build-ios-deps.sh first" >&2; exit 1; }
 done
 
@@ -59,9 +59,13 @@ cpv "$V/openQ4/LICENSE"                                   openQ4/LICENSE
 cpv "$V/openQ4/LICENSES/DOOM-3-ADDITIONAL-TERMS.txt"      openQ4/DOOM-3-ADDITIONAL-TERMS.txt
 cpv "$V/openQ4/LICENSES/DOOM-3-BFG-ADDITIONAL-TERMS.txt"  openQ4/DOOM-3-BFG-ADDITIONAL-TERMS.txt
 
-# --- openQ4-game (Quake 4 SDK EULA, NOT the GPL) ------------------------------
-cpv "$V/openQ4-game/LICENSE"                              openQ4-game/LICENSE
-cpv "$V/openQ4-game/EULA.Development Kit.rtf"             "openQ4-game/EULA.Development Kit.rtf"
+# --- the game modules (Quake 4 SDK EULA, NOT the GPL) -------------------------
+# In-tree upstream since v0.14.000 (src/game, src/mpgame; D-116). The EULA is
+# the same file openQ4-game shipped, byte for byte; LICENSING.md is upstream's
+# own statement of which component is under which terms. The directory keeps
+# its name so every installed bundle and release check finds it where it was.
+cpv "$V/openQ4/LICENSES/QUAKE-4-SDK-EULA.rtf"             "openQ4-game/EULA.Development Kit.rtf"
+cpv "$V/openQ4/LICENSING.md"                              openQ4-game/LICENSING.md
 
 # --- SDL3 (zlib) -----------------------------------------------------------------
 cpv "$V/SDL/LICENSE.txt"                                  SDL3/LICENSE.txt
@@ -105,6 +109,22 @@ excerpt "$V/openQ4/subprojects/glew/src/glew.c" 1 \
 	"/*" GLEW/LICENSE
 excerpt "$V/openQ4/src/external/vulkan/include/vulkan/vulkan_core.h" 4 8 \
 	"/*" Vulkan-Headers/NOTICE
+
+# --- Wrap subprojects the v0.14 client links (D-116) --------------------------
+# RmlUi, JsonCpp and libtess2 (retained UI) and glslang (runtime material
+# compiler) are staged from the pinned tree's own wrap files by
+# scripts/stage-wrap-subprojects.py into build/ios-subprojects/<wrap directory>.
+SUB="$ROOT/build/ios-subprojects"
+wraplic() { # <dir-glob> <licence file> <dest>
+	local matches=( $SUB/$1 )
+	[ "${#matches[@]}" = 1 ] && [ -d "${matches[0]}" ] \
+		|| { echo "FATAL: expected exactly one $SUB/$1 — build an engine lane first (stage-wrap-subprojects.py)" >&2; exit 1; }
+	cpv "${matches[0]}/$2" "$3"
+}
+wraplic 'RmlUi-*'    LICENSE.txt RmlUi/LICENSE.txt
+wraplic 'jsoncpp-*'  LICENSE     JsonCpp/LICENSE
+wraplic 'libtess2-*' LICENSE.txt libtess2/LICENSE.txt
+wraplic 'glslang-*'  LICENSE.txt glslang/LICENSE.txt
 
 # --- Committed, provenance-recorded texts (see header) ------------------------
 for f in MoltenVK/LICENSE cereal/LICENSE README.md; do

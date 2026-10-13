@@ -1,0 +1,28 @@
+--- a/src/renderer/RendererResourceSettings.cpp
++++ b/src/renderer/RendererResourceSettings.cpp
+@@ -547,6 +547,25 @@
+     }
+     return true;
+ }
++#if defined( OPENQ4_RENDERER_MODULE_STATIC )
++/*
++ * openQ4-ios (D-116). The iOS shell initialises the engine on the MAIN thread
++ * (SDL's UIKit video init is main-thread-only) and then moves the frame loop
++ * to a dedicated 16 MB engine thread for good; nothing renders on main after
++ * that. v0.14 binds the renderer's owner thread at first init and refuses any
++ * later Shutdown/Init/restart from another thread, so without this hand-off a
++ * game-module swap (every Arena match) or a vid_restart dies with "Renderer
++ * initialization requires its available owner thread". The engine thread
++ * adopts ownership once, before its first frame, while no checked image work
++ * or owner shutdown can be in flight.
++ */
++extern "C" int OpenQ4_iOS_AdoptRendererThread( void ) {
++    const std::lock_guard<std::mutex> lock(policyMutex);
++    if (active || fullOwnerShutdown) return 0;
++    rendererThread = std::this_thread::get_id();
++    return 1;
++}
++#endif
+ bool R_ImagePolicyRendererThread() {
+     const std::lock_guard<std::mutex> lock(policyMutex);
+     return rendererThread != std::thread::id() && rendererThread == std::this_thread::get_id();

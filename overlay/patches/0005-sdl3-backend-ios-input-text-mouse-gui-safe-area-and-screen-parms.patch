@@ -1,8 +1,8 @@
 --- a/src/sys/sdl3/sdl3_backend.cpp
 +++ b/src/sys/sdl3/sdl3_backend.cpp
-@@ -27,6 +27,12 @@
- #endif
+@@ -28,6 +28,12 @@
  
+ #include "../../framework/NativeInputDispatch.h"
  #if defined(OPENQ4_SDL3_POSIX_HOST)
 +#if defined(__APPLE__)
 +#include <TargetConditionals.h>
@@ -13,7 +13,7 @@
  #include "../posix/posix_public.h"
  #else
  #include "../win32/win_local.h"
-@@ -46,7 +52,15 @@
+@@ -56,7 +62,15 @@
  
  #include <cmath>
  #include <cstdint>
@@ -28,8 +28,8 @@
 +
  #if defined(OPENQ4_SDL3_DARWIN_HOST)
  #include "../osx/macosx_common.h"
- #endif
-@@ -190,6 +204,48 @@
+ // SDL3_SetANGLEHintDefaults runs before SDL_Init, so it cannot use
+@@ -205,6 +219,48 @@
  static idCVar com_steamDeckFrameCap("com_steamDeckFrameCap", "0", CVAR_SYSTEM | CVAR_ARCHIVE | CVAR_INTEGER, "Steam Deck frame cap override (0 = detected display refresh, clamped for Deck)", 0, 1000);
  static idCVar r_screen("r_screen", "-1", CVAR_RENDERER | CVAR_ARCHIVE | CVAR_INTEGER, "SDL3 display index to target (-1 = auto/current display)");
  static idCVar r_multiScreen("r_multiScreen", "0", CVAR_RENDERER | CVAR_ARCHIVE | CVAR_INTEGER, "multi-screen mode (0 = single display, 1 = span all displays)", 0, 1);
@@ -78,7 +78,7 @@
  
  static const unsigned char s_scantokey[128] = {
  	0,          27,    '1',       '2',        '3',    '4',         '5',      '6',
-@@ -281,6 +337,58 @@
+@@ -335,6 +391,58 @@
  static bool s_lowBatteryRumbleScaleActive = false;
  static int s_lowBatteryRumblePercent = -1;
  static const int SDL3_RUMBLE_DEBOUNCE_MSEC = 40;
@@ -137,7 +137,7 @@
  static const int SDL3_MAX_JOYSTICK_BUTTONS = 48;
  static bool s_joystickButtonsDown[SDL3_MAX_JOYSTICK_BUTTONS] = { false };
  static Uint8 s_joystickHatState = SDL_HAT_CENTERED;
-@@ -328,7 +436,9 @@
+@@ -442,7 +550,9 @@
  	SDL3_VIDEO_DRIVER_WAYLAND,
  	SDL3_VIDEO_DRIVER_X11,
  	SDL3_VIDEO_DRIVER_WINDOWS,
@@ -148,7 +148,7 @@
  } sdl3VideoDriver_t;
  
  static sdl3VideoDriver_t s_sdlVideoDriver = SDL3_VIDEO_DRIVER_UNKNOWN;
-@@ -469,6 +579,21 @@
+@@ -763,6 +873,21 @@
  	// candidate lists itself. Ask SDL to keep the platform-native IME UI so
  	// IBus/Fcitx (and the native services on other SDL hosts) remain usable.
  	(void)SDL_SetHintWithPriority(SDL_HINT_IME_IMPLEMENTED_UI, "none", SDL_HINT_DEFAULT);
@@ -170,7 +170,7 @@
  #if defined(OPENQ4_SDL3_LINUX_HOST)
  	const bool disableWaylandLibdecor = SDL3_EnvFlagEnabled("OPENQ4_WAYLAND_DISABLE_LIBDECOR");
  	if (SDL3_EnvFlagEnabled("OPENQ4_FORCE_X11") &&
-@@ -545,6 +670,10 @@
+@@ -840,6 +965,10 @@
  		s_sdlVideoDriver = SDL3_VIDEO_DRIVER_WINDOWS;
  	} else if (SDL3_StringEquals(driverName, "cocoa")) {
  		s_sdlVideoDriver = SDL3_VIDEO_DRIVER_COCOA;
@@ -181,7 +181,7 @@
  	} else {
  		s_sdlVideoDriver = SDL3_VIDEO_DRIVER_UNKNOWN;
  	}
-@@ -554,20 +683,154 @@
+@@ -849,20 +978,154 @@
  	return s_sdlVideoDriver == SDL3_VIDEO_DRIVER_WAYLAND;
  }
  
@@ -336,7 +336,7 @@
  static void SDL3_PrintVideoDriverSummary(void) {
  	if (s_sdlVideoDriverSummaryLogged) {
  		return;
-@@ -669,10 +932,154 @@
+@@ -974,6 +1237,74 @@
  	Sys_LeaveCriticalSection(CRITICAL_SECTION_ONE);
  }
  
@@ -408,7 +408,10 @@
 +}
 +#endif
 +
- static bool SDL3_ShouldRouteMenuMouse(void) {
+ #ifndef ID_DEDICATED
+ void RetainedUI_QueueInput(const retainedUIInput_t& event, int time) {
+ 	if (!RetainedUI_IsOpen()) return;
+@@ -1019,6 +1350,82 @@
  	return ( session != NULL && session->IsGUIActive() ) || ( console != NULL && console->Active() );
  }
  
@@ -489,9 +492,9 @@
 +
 +
  static idUserInterface *SDL3_GetActiveMenuGui(void) {
+ 	if (RetainedUI_IsOpen()) return NULL;
  	return ( session != NULL ) ? session->GetActiveGUI() : NULL;
- }
-@@ -708,7 +1115,34 @@
+@@ -1055,7 +1462,34 @@
  }
  
  static void SDL3_SetControllerHintDefaults(void) {
@@ -527,7 +530,7 @@
  	(void)SDL_SetHintWithPriority(SDL_HINT_JOYSTICK_HIDAPI, "1", SDL_HINT_DEFAULT);
  	(void)SDL_SetHintWithPriority(SDL_HINT_JOYSTICK_ENHANCED_REPORTS, "auto", SDL_HINT_DEFAULT);
  	(void)SDL_SetHintWithPriority(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "0", SDL_HINT_DEFAULT);
-@@ -830,6 +1264,11 @@
+@@ -1178,6 +1612,11 @@
  		pixelWidth = windowWidth;
  		pixelHeight = windowHeight;
  	}
@@ -539,7 +542,7 @@
  
  	transform.guiWidth = static_cast<float>(SCREEN_WIDTH);
  	transform.guiHeight = static_cast<float>(SCREEN_HEIGHT);
-@@ -960,6 +1399,17 @@
+@@ -1303,6 +1742,17 @@
  			static_cast<int>(guiCursorOffset * guiToPixelX * transform.pixelToWindowX));
  	}
  
@@ -557,7 +560,7 @@
  	if (!SDL_SetTextInputArea(s_sdlWindow, &textArea, cursorOffset)) {
  		common->DPrintf("SDL3: text input candidate area could not be updated: %s\n", SDL_GetError());
  	}
-@@ -976,6 +1426,30 @@
+@@ -1319,6 +1769,30 @@
  	const bool consoleAcceptsText = console != NULL && console->Active();
  	const bool guiAcceptsText = SDL3_GetActiveGuiTextInputState(guiTextArea, guiCursorOffset);
  	const bool shouldAcceptText = win32.activeApp && (consoleAcceptsText || guiAcceptsText);
@@ -588,7 +591,7 @@
  	if (shouldAcceptText && !s_sdlTextInputActive) {
  		if (SDL_StartTextInput(s_sdlWindow)) {
  			s_sdlTextInputActive = true;
-@@ -1473,7 +1947,7 @@
+@@ -1834,7 +2308,7 @@
  	return s_sdlGamepad != NULL || s_sdlJoystick != NULL;
  }
  
@@ -597,7 +600,7 @@
  	if (s_sdlGamepad) {
  		return SDL_RumbleGamepad(s_sdlGamepad, low, high, durationMsec);
  	}
-@@ -1481,6 +1955,34 @@
+@@ -1842,6 +2316,34 @@
  		return SDL_RumbleJoystick(s_sdlJoystick, low, high, durationMsec);
  	}
  	return false;
@@ -632,7 +635,7 @@
  }
  
  static void SDL3_ResetExpiredRumbleState(int now) {
-@@ -1514,8 +2016,17 @@
+@@ -1876,8 +2378,17 @@
  	Sys_LeaveCriticalSection(CRITICAL_SECTION_ONE);
  }
  
@@ -650,7 +653,7 @@
  	memset(s_gamepadButtonsDown, 0, sizeof(s_gamepadButtonsDown));
  	s_gamepadLeftTriggerDown = false;
  	s_gamepadRightTriggerDown = false;
-@@ -1560,9 +2071,187 @@
+@@ -1923,9 +2434,187 @@
  	if (rightDown != s_gamepadRightTriggerDown) {
  		s_gamepadRightTriggerDown = rightDown;
  		SDL3_PostControllerKeyEvent(K_JOY15, rightDown, eventTime);
@@ -838,7 +841,7 @@
  static void SDL3_UpdateGamepadAxes(int eventTime) {
  	if (!s_sdlGamepad) {
  		SDL3_ClearJoystickState();
-@@ -1598,14 +2287,34 @@
+@@ -1964,14 +2653,34 @@
  		lookX,
  		lookY);
  
@@ -876,7 +879,7 @@
  	Sys_EnterCriticalSection(CRITICAL_SECTION_ONE);
  	s_joystickAxisState[AXIS_SIDE] = lookX;
  	s_joystickAxisState[AXIS_FORWARD] = lookY;
-@@ -1622,6 +2331,99 @@
+@@ -1988,6 +2697,99 @@
  	SDL3_QueueControllerActivity(eventTime, activity);
  }
  
@@ -976,15 +979,15 @@
  static void SDL3_UpdateJoystickAxes(void) {
  	if (!s_sdlJoystick) {
  		SDL3_ClearJoystickState();
-@@ -1652,6 +2454,7 @@
+@@ -2018,6 +2820,7 @@
  	int lookX = 0;
  	int lookY = 0;
  	int up = 0;
 +	int menuLookY = 0;
- 
- 	SDL3_NormalizeJoystickAxisPair(
- 		moveAxisX,
-@@ -1661,6 +2464,9 @@
+ 	SDL3_PublishRadialStick(
+ 		SDL3_GetJoystickAxisOrZero(hasDedicatedLookAxis ? lookAxisX : moveAxisX),
+ 		SDL3_GetJoystickAxisOrZero(hasDedicatedLookAxis ? lookAxisY : moveAxisY));
+@@ -2030,6 +2833,9 @@
  		1.0f,
  		moveX,
  		moveY);
@@ -994,7 +997,7 @@
  	moveY = -moveY;
  
  	if (hasDedicatedLookAxis) {
-@@ -1672,6 +2478,7 @@
+@@ -2041,6 +2847,7 @@
  			1.0f,
  			lookX,
  			lookY);
@@ -1002,7 +1005,7 @@
  		if (in_joystickInvertLook.GetBool()) {
  			lookY = -lookY;
  		}
-@@ -1687,13 +2494,33 @@
+@@ -2056,13 +2863,33 @@
  		up = -SDL3_NormalizeSignedAxis(SDL3_GetJoystickAxisOrZero(upAxisNegative), deadZone);
  	}
  
@@ -1041,7 +1044,7 @@
  	Sys_LeaveCriticalSection(CRITICAL_SECTION_ONE);
  
  	const int activity = Max(Max(idMath::Abs(moveX), idMath::Abs(moveY)),
-@@ -1701,6 +2528,7 @@
+@@ -2070,6 +2897,7 @@
  	SDL3_QueueControllerActivity(Sys_Milliseconds(), activity);
  }
  
@@ -1049,7 +1052,7 @@
  static void SDL3_SetJoystickHat(Uint8 newHat, int eventTime) {
  	const Uint8 oldHat = s_joystickHatState;
  	const bool oldUp = (oldHat & SDL_HAT_UP) != 0;
-@@ -2056,6 +2884,95 @@
+@@ -2427,6 +3255,95 @@
  	}
  }
  
@@ -1145,7 +1148,7 @@
  static void SDL3_ReleaseFocusInputState(int eventTime) {
  	if (s_sdlFocusInputReleased) {
  		return;
-@@ -3623,7 +4540,70 @@
+@@ -4074,7 +4991,70 @@
  	return static_cast<int>(value);
  }
  
@@ -1216,7 +1219,7 @@
  	engineWindowState.uiViewportX = x;
  	engineWindowState.uiViewportY = y;
  	engineWindowState.uiViewportWidth = width;
-@@ -3718,6 +4698,42 @@
+@@ -4169,6 +5149,42 @@
  	SDL3_SetUIViewport( 0, 0, pixelWidth, pixelHeight );
  }
  
@@ -1257,9 +1260,9 @@
 +#endif
 +
  static void SDL3_RecordWindowedPlacement(int x, int y, int width, int height) {
- 	if (width <= 0 || height <= 0) {
+ 	if (Sys_WindowPlacementLeaseActive() || width <= 0 || height <= 0) {
  		return;
-@@ -3806,17 +4822,142 @@
+@@ -4257,7 +5273,17 @@
  		pixelHeight = height;
  	}
  
@@ -1276,6 +1279,10 @@
 +	if (pixelWidth > 0 && pixelHeight > 0) {
  		SDL3_SetVidSize( pixelWidth, pixelHeight );
  	}
+ 	const float uiDisplayScale = SDL_GetWindowDisplayScale(s_sdlWindow);
+@@ -4265,13 +5291,128 @@
+ 	engineWindowState.pixelDensityX = width > 0 && pixelWidth > 0 ? static_cast<float>(pixelWidth) / width : 1.0f;
+ 	engineWindowState.pixelDensityY = height > 0 && pixelHeight > 0 ? static_cast<float>(pixelHeight) / height : 1.0f;
  
 +#if defined(__APPLE__) && TARGET_OS_IPHONE
 +	// D-104. One window, one display, and the window always fills it: there is
@@ -1402,7 +1409,7 @@
  static void SDL3_PrintWaylandWindowState(const char *description) {
  	if (!s_sdlWindow || !SDL3_IsNativeWaylandVideoDriver()) {
  		return;
-@@ -3994,6 +5135,66 @@
+@@ -4450,6 +5591,66 @@
  		return false;
  	}
  
@@ -1469,7 +1476,7 @@
  	if (parms.hiddenWindow) {
  		parms.fullScreen = false;
  		parms.borderless = false;
-@@ -4504,6 +5705,20 @@
+@@ -4989,6 +6190,20 @@
  		// already mutex-protected and the main loop keeps the pump fresh.
  		return false;
  	}
@@ -1490,7 +1497,7 @@
  	const bool gameWindowReady = s_sdlVideoReferenceHeld && s_sdlWindow;
  	if (!gameWindowReady) {
  		SDL3_ProcessPendingLifecycleEvents(Sys_Milliseconds());
-@@ -5093,6 +6308,20 @@
+@@ -5610,6 +6825,20 @@
  }
  
  void IN_ActivateMouse(void) {
@@ -1511,7 +1518,7 @@
  	if (!s_sdlWindow || !win32.in_mouse.GetBool() || SDL3_IsMouseCaptured()) {
  		return;
  	}
-@@ -5206,6 +6435,39 @@
+@@ -5723,6 +6952,39 @@
  void IN_Frame(void) {
  	win32.mouseGrabbed = SDL3_IsMouseCaptured();
  
@@ -1551,7 +1558,7 @@
  	bool shouldGrab = true;
  	const bool routeMenuMouse = SDL3_ShouldRouteMenuMouse();
  	const bool consoleActive = console != NULL && console->Active();
-@@ -5497,6 +6759,39 @@
+@@ -6265,6 +7527,39 @@
  bool Sys_SetJoystickRumble(float lowFrequency, float highFrequency, int durationMsec) {
  	const int now = Sys_Milliseconds();
  
@@ -1591,7 +1598,7 @@
  	if (!in_joystick.GetBool() || !in_joystickRumble.GetBool() || durationMsec <= 0) {
  		if (s_joystickRumbleActive) {
  			SDL3_StopControllerRumble();
-@@ -5539,10 +6834,166 @@
+@@ -6307,6 +7602,167 @@
  	return true;
  }
  
@@ -1627,7 +1634,7 @@
 +	s_rumbleEventUntil = Max(s_rumbleEventUntil, now + msec);
 +	(void)Sys_SetJoystickRumble(0.0f, 0.0f, 1);
 +}
- 
++
 +static bool SDLCALL SDL3_VirtualRumble(void *userdata, Uint16 low, Uint16 high) {
 +	(void)userdata;
 +	s_rumbleVirtualCalls++;
@@ -1635,7 +1642,7 @@
 +	s_rumbleVirtualLastHigh = high;
 +	return true;
 +}
- 
++
 +static bool SDLCALL SDL3_VirtualRumbleTriggers(void *userdata, Uint16 left, Uint16 right) {
 +	(void)userdata;
 +	(void)left;
@@ -1643,7 +1650,7 @@
 +	s_rumbleVirtualTriggerCalls++;
 +	return true;
 +}
- 
++
 +static void SDL3_RumbleStatus_f(const idCmdArgs &args) {
 +	const int now = Sys_Milliseconds();
 +	if (args.Argc() > 1 && idStr::Icmp(args.Argv(1), "reset") == 0) {
@@ -1691,7 +1698,7 @@
 +			static_cast<unsigned int>(s_rumbleVirtualLastLow), static_cast<unsigned int>(s_rumbleVirtualLastHigh));
 +	}
 +}
- 
++
 +/*
 + * rumbleTest [low high msec]  one raw pulse straight to SDL (motors 0..1,
 + *                              default 1 1 500) plus the same on the triggers,
@@ -1755,22 +1762,11 @@
 +	SDL3_RumbleStatus_f(args);
 +}
 +#endif
- 
- 
- 
-@@ -5550,6 +7001,11 @@
- 
- 
- 
 +
-+
-+
-+
-+
- void GLimp_PreserveWindowOnShutdown(bool preserve) {
- 	s_preserveWindowOnShutdown = preserve;
- }
-@@ -5752,6 +7208,12 @@
+ #ifndef ID_DEDICATED
+ void Sys_PostVRControllerKey(int key, bool down) {
+ 	const int eventTime = Sys_Milliseconds();
+@@ -6582,6 +8038,12 @@
  		cmdSystem->AddCommand("listDisplays", SDL3_ListDisplays_f, CMD_FL_SYSTEM, "lists SDL3 displays and monitor indices");
  		cmdSystem->AddCommand("listDisplayModes", SDL3_ListDisplayModes_f, CMD_FL_SYSTEM, "lists SDL3 fullscreen display modes (optional display index)");
  		cmdSystem->AddCommand("listControllers", SDL3_ListControllers_f, CMD_FL_SYSTEM, "lists SDL3 controller, sensor, touchpad, and battery diagnostics");
@@ -1783,7 +1779,7 @@
  		cmdSystem->AddCommand("sdl3MouseCaptureDiagnostics", SDL3_MouseCaptureDiagnostics_f, CMD_FL_SYSTEM, "toggles SDL3 mouse capture and prints backend state; optional repeat count is clamped to 1..8");
  		s_sdlDiagnosticCommandsRegistered = true;
  	}
-@@ -5842,6 +7304,14 @@
+@@ -6673,6 +8135,14 @@
  
  		s_sdlWindow = SDL_CreateWindow(GAME_WINDOW_TITLE, parms->width, parms->height, flags);
  		if (!s_sdlWindow) {
@@ -1798,7 +1794,7 @@
  			return false;
  		}
  		s_sdlWindowSurfaceKind = requestedSurfaceKind;
-@@ -5891,6 +7361,11 @@
+@@ -6723,6 +8193,11 @@
  
  static void SDL3_WindowServices_RefreshNativeWindowHandles(renderModuleWindowInfo_t *outInfo) {
  	SDL3_UpdateNativeWindowHandles();
@@ -1810,7 +1806,7 @@
  	if (outInfo != NULL) {
  		SDL3_FillWindowInfo(outInfo);
  	}
-@@ -6093,10 +7568,50 @@
+@@ -6929,10 +8404,50 @@
  		return false;
  	}
  	VkSurfaceKHR surface = 0;

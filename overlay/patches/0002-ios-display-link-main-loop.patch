@@ -36,7 +36,7 @@
  static void Sys_HandlePendingQuitSignal(void) {
  	const int quitSignal = Posix_ConsumeQuitSignal();
  	if (quitSignal == 0) {
-@@ -26,40 +49,767 @@
+@@ -26,37 +49,762 @@
  	Posix_SetExit(128 + quitSignal);
  	common->Printf("Exiting on %s\n", Posix_SignalName(quitSignal));
  	common->Quit();
@@ -711,23 +711,17 @@
 +
  static int SDLCALL OpenQ4_Main(int argc, char **argv) {
  	Posix_EarlyInit();
--#ifndef ID_DEDICATED
-+
+ 
 +#if TARGET_OS_IPHONE
 +	// Before common->Init(): the engine fatals when it cannot find retail data,
 +	// and on iOS that fatal is both unreadable (no console) and unreliable
 +	// (upstream #96), so a missing-data launch just looks like the app quitting.
 +	// Import the data first, with a real UI.
++	// (The splash moved into idCommonLocal::Init upstream in v0.14; 0007 keeps
++	// it off iOS — UIKit allows one window per display.)
 +	OpenQ4_iOS_EnsureGameData();
 +#endif
-+#if !defined( ID_DEDICATED ) && !TARGET_OS_IPHONE
-+	// No splash on iOS. UIKit permits exactly ONE window per display, and the
-+	// splash takes it — the renderer's own SDL_CreateWindow then fails with
-+	// "Only one window allowed per display." iOS shows its own launch screen
-+	// from the app bundle anyway, so nothing is lost.
- 	Sys_ShowSplash();
- #endif
- 
++
 +#if TARGET_OS_IPHONE
 +	// Do NOT initialise here — see OpenQ4_iOS_DeferredInit. Stash argv, start
 +	// the display link, and return so the launch completes inside the watchdog's

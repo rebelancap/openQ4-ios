@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# fetch-vendor.sh — clone the two pinned upstreams into vendor/ (D-113).
+# fetch-vendor.sh — clone the pinned upstream into vendor/ (D-113, D-116).
 #
 #   scripts/fetch-vendor.sh
 #
 # vendor/openQ4       themuffinator/openQ4       at OPENQ4_REF / OPENQ4_COMMIT
-# vendor/openQ4-game  themuffinator/openQ4-game  at OPENQ4_GAME_COMMIT
 #
-# Both come from UPSTREAM.pin and are pinned AS A PAIR (the game API version
-# couples them). Shallow (--depth 1): the build needs no upstream history, and
+# Since v0.14.000 the SP/MP game sources are in-tree (src/game, src/mpgame), so
+# the engine/game pair is one commit; UPSTREAM.pin still records the game keys
+# and they must equal the engine's (asserted below). Pins before v0.14 used a
+# second clone, vendor/openQ4-game (D-110). Shallow (--depth 1): the build needs no upstream history, and
 # the engine clone is ~3 GB even so — 2.4 GB of it is content/, the source of
 # the baseoq4 packs.
 #
@@ -30,6 +31,10 @@ ENGINE_REF="$(pinval OPENQ4_REF)"
 ENGINE_COMMIT="$(pinval OPENQ4_COMMIT)"
 GAME_REPO="$(pinval OPENQ4_GAME_REPO)"
 GAME_COMMIT="$(pinval OPENQ4_GAME_COMMIT)"
+[ "$GAME_COMMIT" = "$ENGINE_COMMIT" ] || {
+	echo "FATAL: UPSTREAM.pin game commit $GAME_COMMIT != engine commit $ENGINE_COMMIT —" >&2
+	echo "       game sources are in-tree since v0.14.000 (D-116); move pins only with scripts/bump-pin.sh" >&2
+	exit 1; }
 for v in ENGINE_REPO ENGINE_COMMIT GAME_REPO GAME_COMMIT; do
 	[ -n "${!v}" ] || { echo "FATAL: $v missing from $PIN" >&2; exit 1; }
 done
@@ -65,19 +70,13 @@ fi
 verify "$E" "$ENGINE_COMMIT"
 echo "    vendor/openQ4       ${ENGINE_COMMIT:0:12} ${ENGINE_REF:+($ENGINE_REF)}"
 
-# --- game modules (no tags upstream: fetch the commit) --------------------------
-G="$ROOT/vendor/openQ4-game"
-if [ ! -d "$G" ]; then
-	echo "==> cloning openQ4-game at $GAME_COMMIT (shallow)"
-	git init -q "$G"
-	git -C "$G" remote add origin "$GAME_REPO"
-	git -C "$G" fetch --depth 1 origin "$GAME_COMMIT"
-	git -C "$G" -c advice.detachedHead=false checkout --quiet --detach FETCH_HEAD
-fi
-verify "$G" "$GAME_COMMIT"
-echo "    vendor/openQ4-game  ${GAME_COMMIT:0:12}"
+# --- game modules: in-tree ------------------------------------------------------
+for f in src/game/Game_local.cpp src/mpgame/Game_local.cpp; do
+	[ -f "$E/$f" ] || { echo "FATAL: $E has no $f — game sources are not in-tree at this pin" >&2; exit 1; }
+done
+echo "    game sources        in-tree (src/game, src/mpgame)"
 
-for d in "$E" "$G"; do
+for d in "$E"; do
 	if [ -n "$(git -C "$d" status --porcelain --untracked-files=no)" ]; then
 		echo "FATAL: $d has local modifications — vendor/ is never hand-edited" >&2
 		git -C "$d" status --short --untracked-files=no | head >&2

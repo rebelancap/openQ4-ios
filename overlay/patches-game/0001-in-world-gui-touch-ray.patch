@@ -1,6 +1,6 @@
 --- a/src/game/Player.cpp
 +++ b/src/game/Player.cpp
-@@ -7440,14 +7440,49 @@
+@@ -7052,14 +7052,49 @@
  		return;
  	}
  
@@ -52,7 +52,7 @@
  			command = ui->HandleEvent( &ev, gameLocal.time, &updateVisuals );
  			if ( updateVisuals && focusEnt && ui == focusUI ) {
  				focusEnt->UpdateVisuals();
-@@ -7876,7 +7911,57 @@
+@@ -7488,7 +7523,57 @@
  	talkCursor = 0;
  	start = GetEyePosition();
  	end = start + viewAngles.ToForward() * 768.0f;
@@ -110,7 +110,7 @@
   	// player identification -> names to the hud
   	if ( gameLocal.isMultiplayer && entityNumber == gameLocal.localClientNum ) {
  		trace_t trace;
-@@ -8357,12 +8442,26 @@
+@@ -7969,12 +8054,26 @@
  
  			const float guiFocusLength = ( end - start ).LengthFast() * pt.fraction;
  
@@ -137,7 +137,7 @@
  				ClearFocus ( );
  				focusType = FOCUS_BRACKETS;
  #ifdef _XENON
-@@ -8444,6 +8543,9 @@
+@@ -8053,6 +8152,9 @@
  			hud->SetStateInt( "hideInteractive", 0 );
  #endif
  
@@ -147,7 +147,7 @@
  			SetFocus ( FOCUS_GUI, FOCUS_GUI_TIME, ent, ui );
  			break;
  		}
-@@ -8511,6 +8613,31 @@
+@@ -8120,6 +8222,31 @@
   		cursor->SetStateInt( "talkcursor", talkCursor );
   	}
   
@@ -181,7 +181,7 @@
  /*
 --- a/src/mpgame/Player.cpp
 +++ b/src/mpgame/Player.cpp
-@@ -7289,14 +7289,49 @@
+@@ -7436,14 +7436,49 @@
  		return;
  	}
  
@@ -233,7 +233,7 @@
  			command = ui->HandleEvent( &ev, gameLocal.time, &updateVisuals );
  			if ( updateVisuals && focusEnt && ui == focusUI ) {
  				focusEnt->UpdateVisuals();
-@@ -7828,7 +7863,57 @@
+@@ -7975,7 +8010,57 @@
  	talkCursor = 0;
  	start = GetEyePosition();
  	end = start + viewAngles.ToForward() * 768.0f;
@@ -291,7 +291,7 @@
   	// player identification -> names to the hud
   	if ( gameLocal.isMultiplayer && IsLocalClient() ) {
  		trace_t trace;
-@@ -8264,12 +8349,26 @@
+@@ -8411,12 +8496,26 @@
  
  			const float guiFocusLength = ( end - start ).LengthFast() * pt.fraction;
  
@@ -318,7 +318,7 @@
  				ClearFocus ( );
  				focusType = FOCUS_BRACKETS;
  #ifdef _XENON
-@@ -8351,6 +8450,9 @@
+@@ -8495,6 +8594,9 @@
  			hud->SetStateInt( "hideInteractive", 0 );
  #endif
  
@@ -328,7 +328,7 @@
  			SetFocus ( FOCUS_GUI, FOCUS_GUI_TIME, ent, ui );
  			break;
  		}
-@@ -8418,6 +8520,31 @@
+@@ -8562,6 +8664,31 @@
   		cursor->SetStateInt( "talkcursor", talkCursor );
   	}
   
