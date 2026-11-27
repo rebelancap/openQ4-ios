@@ -1,0 +1,25 @@
+--- a/src/game/gamesys/AnimatedCrosshair.inl
++++ b/src/game/gamesys/AnimatedCrosshair.inl
+@@ -165,9 +165,11 @@
+ 	const float screenHeight = Max( 1.0f, (float)renderSystem->GetScreenHeight() );
+ 	pixel = (float)SCREEN_HEIGHT / ( screenHeight * unit * yScale );
+ 
+-	if ( white == NULL ) {
+-		white = declManager->FindMaterial( "_white" );
+-	}
++	// openQ4-ios (D-123): looked up every frame, never kept. This canvas is a
++	// function-local static; on iOS the game module stays mapped across a game
++	// reload (SP <-> MP), so a pointer kept from the last game named a material
++	// the reload had freed (SIGSEGV in DrawHudPrimitives on the first HUD frame).
++	white = declManager->FindMaterial( "_white" );
+ 	prims.Clear();
+ 	prims.Reserve( 256 );
+ }
+@@ -1420,6 +1422,7 @@
+ */
+ void rvAnimatedCrosshair::Clear( void ) {
+ 	memset( &xhState, 0, sizeof( xhState ) );
++	xhTest.Clear();	// openQ4-ios (D-123): pooled strings must not outlive the game on a mapped module
+ 	xhOwnsMarker = false;
+ 	xhTestShot = 0;
+ 	xhDesignCache.valid = false;

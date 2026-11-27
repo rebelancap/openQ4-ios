@@ -13,7 +13,7 @@
  #include "../posix/posix_public.h"
  #else
  #include "../win32/win_local.h"
-@@ -56,7 +62,15 @@
+@@ -57,7 +63,15 @@
  
  #include <cmath>
  #include <cstdint>
@@ -27,13 +27,12 @@
 +#endif
 +
  #if defined(OPENQ4_SDL3_DARWIN_HOST)
- #include "../osx/macosx_common.h"
+ #include "../macos/macos_common.h"
  // SDL3_SetANGLEHintDefaults runs before SDL_Init, so it cannot use
-@@ -205,6 +219,48 @@
- static idCVar com_steamDeckFrameCap("com_steamDeckFrameCap", "0", CVAR_SYSTEM | CVAR_ARCHIVE | CVAR_INTEGER, "Steam Deck frame cap override (0 = detected display refresh, clamped for Deck)", 0, 1000);
+@@ -216,6 +230,48 @@
  static idCVar r_screen("r_screen", "-1", CVAR_RENDERER | CVAR_ARCHIVE | CVAR_INTEGER, "SDL3 display index to target (-1 = auto/current display)");
  static idCVar r_multiScreen("r_multiScreen", "0", CVAR_RENDERER | CVAR_ARCHIVE | CVAR_INTEGER, "multi-screen mode (0 = single display, 1 = span all displays)", 0, 1);
-+
+ 
 +#if defined( __APPLE__ ) && TARGET_OS_IPHONE
 +/*
 + * GUI safe-area insets (openQ4-ios D-085).
@@ -75,10 +74,11 @@
 +static idCVar in_safeAreaBottom("in_safeAreaBottom", "0", CVAR_SYSTEM | CVAR_NOCHEAT | CVAR_FLOAT, "iOS: bottom safe-area inset as a fraction of the drawable height (published by the shell)", 0.0f, 0.25f);
 +static idCVar r_guiSafeInsets("r_guiSafeInsets", "1", CVAR_RENDERER | CVAR_ARCHIVE | CVAR_BOOL, "iOS: keep all 2D UI inside the display's safe area (0 = full-bleed, the pre-D-085 behaviour)");
 +#endif
- 
++
  static const unsigned char s_scantokey[128] = {
  	0,          27,    '1',       '2',        '3',    '4',         '5',      '6',
-@@ -335,6 +391,58 @@
+ 	'7',        '8',    '9',       '0',        '-',    '=',          K_BACKSPACE, 9,
+@@ -345,6 +401,52 @@
  static bool s_lowBatteryRumbleScaleActive = false;
  static int s_lowBatteryRumblePercent = -1;
  static const int SDL3_RUMBLE_DEBOUNCE_MSEC = 40;
@@ -90,19 +90,14 @@
 + * or `causeRumble`), which in retail data means set pieces — the airdefense
 + * cannon, explosions, vehicles, boss footsteps — and never a weapon firing or
 + * the player being hit. Raven's console build rumbled on both (the stripped
-+ * "jnewquist: Controller rumble" markers in PlayerView), so the game patch
-+ * 0002 asks for those two through `rumbleEvent`, and the pulses are merged
-+ * into the sound-driven stream here (the sound path calls Sys_SetJoystickRumble
-+ * with zeros every frame, which would otherwise cut a pulse off one frame in).
++ * "jnewquist: Controller rumble" markers in PlayerView). Our game patch 0002
++ * and a `rumbleEvent` mixer here added both until v0.15.0, which ships its
++ * own (idPlayer::VRVibrate -> Sys_PulseJoystickRumble, mixed with the sound
++ * level in sys_local.cpp); ours was retired with that pin (D-121).
 + *
 + * The counters make "does rumble work" a one-line answer on hardware: was a
 + * pad open, does SDL say it can rumble, did anything ask, did SDL accept it.
 + */
-+static idCVar in_joystickRumbleFire("in_joystickRumbleFire", "1.0", CVAR_SYSTEM | CVAR_ARCHIVE | CVAR_FLOAT, "controller rumble scale for the player's own weapon firing (0 = off)", 0.0f, 2.0f);
-+static idCVar in_joystickRumbleDamage("in_joystickRumbleDamage", "1.0", CVAR_SYSTEM | CVAR_ARCHIVE | CVAR_FLOAT, "controller rumble scale for the player taking damage (0 = off)", 0.0f, 2.0f);
-+static float s_rumbleEventLow = 0.0f;
-+static float s_rumbleEventHigh = 0.0f;
-+static int s_rumbleEventUntil = 0;
 +static int s_rumbleStatRequests = 0;      // non-zero Sys_SetJoystickRumble asks
 +static int s_rumbleStatNoTarget = 0;      // ... with no pad open
 +static int s_rumbleStatDisabled = 0;      // ... with in_joystick/in_joystickRumble off
@@ -110,7 +105,6 @@
 +static int s_rumbleStatSendOk = 0;
 +static int s_rumbleStatSendFail = 0;
 +static int s_rumbleStatStops = 0;
-+static int s_rumbleStatEvents[2] = { 0, 0 };  // fire, damage
 +static int s_rumbleStatSoundFrames = 0;   // frames the sound world asked for rumble
 +static float s_rumbleStatLastSoundAmp = 0.0f;
 +// D-112: the SHAPE of sound-driven rumble, not just its count. A run is a
@@ -137,7 +131,7 @@
  static const int SDL3_MAX_JOYSTICK_BUTTONS = 48;
  static bool s_joystickButtonsDown[SDL3_MAX_JOYSTICK_BUTTONS] = { false };
  static Uint8 s_joystickHatState = SDL_HAT_CENTERED;
-@@ -442,7 +550,9 @@
+@@ -482,7 +584,9 @@
  	SDL3_VIDEO_DRIVER_WAYLAND,
  	SDL3_VIDEO_DRIVER_X11,
  	SDL3_VIDEO_DRIVER_WINDOWS,
@@ -148,7 +142,7 @@
  } sdl3VideoDriver_t;
  
  static sdl3VideoDriver_t s_sdlVideoDriver = SDL3_VIDEO_DRIVER_UNKNOWN;
-@@ -763,6 +873,21 @@
+@@ -804,6 +908,21 @@
  	// candidate lists itself. Ask SDL to keep the platform-native IME UI so
  	// IBus/Fcitx (and the native services on other SDL hosts) remain usable.
  	(void)SDL_SetHintWithPriority(SDL_HINT_IME_IMPLEMENTED_UI, "none", SDL_HINT_DEFAULT);
@@ -170,7 +164,7 @@
  #if defined(OPENQ4_SDL3_LINUX_HOST)
  	const bool disableWaylandLibdecor = SDL3_EnvFlagEnabled("OPENQ4_WAYLAND_DISABLE_LIBDECOR");
  	if (SDL3_EnvFlagEnabled("OPENQ4_FORCE_X11") &&
-@@ -840,6 +965,10 @@
+@@ -881,6 +1000,10 @@
  		s_sdlVideoDriver = SDL3_VIDEO_DRIVER_WINDOWS;
  	} else if (SDL3_StringEquals(driverName, "cocoa")) {
  		s_sdlVideoDriver = SDL3_VIDEO_DRIVER_COCOA;
@@ -181,7 +175,7 @@
  	} else {
  		s_sdlVideoDriver = SDL3_VIDEO_DRIVER_UNKNOWN;
  	}
-@@ -849,20 +978,154 @@
+@@ -890,14 +1013,56 @@
  	return s_sdlVideoDriver == SDL3_VIDEO_DRIVER_WAYLAND;
  }
  
@@ -237,6 +231,9 @@
 +#endif
  }
  
+ // False while the game window shows nothing: hidden (r_hiddenWindow, batch
+@@ -935,8 +1100,100 @@
+ 
  static bool SDL3_UseAbsoluteWindowPlacement(void) {
  	return !SDL3_IsNativeWaylandVideoDriver();
 +}
@@ -271,8 +268,8 @@
 +	if (scale < 0.5f) { scale = 0.5f; }
 +	if (scale > 1.0f) { scale = 1.0f; }
 +	return scale;
- }
- 
++}
++
 +// Even dimensions only: half-resolution passes and block-compressed resolve
 +// targets both prefer them, and an odd extent buys nothing.
 +static int s_iosRawPixelWidth = 0;
@@ -293,8 +290,8 @@
 +		if (scaled < 2) { scaled = 2; }
 +		*height = scaled;
 +	}
-+}
-+
+ }
+ 
 +extern "C" bool OpenQ4_iOS_RenderPixelSize( int *width, int *height );
 +
 +/*
@@ -336,11 +333,29 @@
  static void SDL3_PrintVideoDriverSummary(void) {
  	if (s_sdlVideoDriverSummaryLogged) {
  		return;
-@@ -974,6 +1237,74 @@
+@@ -1046,8 +1303,92 @@
+ 	s_mouseQueue[s_mouseHead].time = time;
+ 	s_mouseHead = next;
  	Sys_LeaveCriticalSection(CRITICAL_SECTION_ONE);
- }
- 
++}
++
 +#if defined(__APPLE__) && TARGET_OS_IPHONE
++/*
++ * Soft-keyboard policy on touch (D-123). The retained menus focus a page's
++ * first control when it opens — on Multiplayer > Settings and the Save Game
++ * page that is a name field — and a focused field asks for text input, which
++ * on iOS presents the keyboard over half the screen before the player has
++ * asked to type. On a touch device the keyboard now appears when a tap lands
++ * on the focused field; focus that arrived by pad, keys or a bind (chat, the
++ * console) still presents it at once. The keyboard's Done drops the
++ * permission again until the next tap on a field.
++ */
++static std::atomic<int>   s_iosFieldTapSerial( 0 );
++static std::atomic<float> s_iosFieldTapX( -1.0f ), s_iosFieldTapY( -1.0f );   // GUI cursor units
++static std::atomic<int>   s_iosKeyboardDismissSerial( 0 );
++extern "C" void OpenQ4_iOS_NoteKeyboardDismissed( void ) {
++	s_iosKeyboardDismissSerial.fetch_add( 1, std::memory_order_release );
++}
 +// Text-input state published by the engine thread, applied by the main thread.
 +static volatile int s_iosTextInputWanted = 0;
 +static SDL_Rect     s_iosTextInputArea = { 0, 0, 0, 0 };
@@ -369,8 +384,8 @@
 +	if (dy != 0) {
 +		SDL3_QueueMouseInput(M_DELTAY, dy, eventTime);
 +	}
-+}
-+
+ }
+ 
 +/*
 + * MAIN THREAD ONLY. Applies the text-input state the engine thread asked for.
 + * Called from the display-link tick beside the SDL pump, so every UIKit
@@ -411,7 +426,7 @@
  #ifndef ID_DEDICATED
  void RetainedUI_QueueInput(const retainedUIInput_t& event, int time) {
  	if (!RetainedUI_IsOpen()) return;
-@@ -1019,6 +1350,82 @@
+@@ -1093,6 +1434,82 @@
  	return ( session != NULL && session->IsGUIActive() ) || ( console != NULL && console->Active() );
  }
  
@@ -493,8 +508,8 @@
 +
  static idUserInterface *SDL3_GetActiveMenuGui(void) {
  	if (RetainedUI_IsOpen()) return NULL;
- 	return ( session != NULL ) ? session->GetActiveGUI() : NULL;
-@@ -1055,7 +1462,34 @@
+ 	// The GUI that receives menu input, which may be a retained screen covering
+@@ -1131,7 +1548,34 @@
  }
  
  static void SDL3_SetControllerHintDefaults(void) {
@@ -530,7 +545,7 @@
  	(void)SDL_SetHintWithPriority(SDL_HINT_JOYSTICK_HIDAPI, "1", SDL_HINT_DEFAULT);
  	(void)SDL_SetHintWithPriority(SDL_HINT_JOYSTICK_ENHANCED_REPORTS, "auto", SDL_HINT_DEFAULT);
  	(void)SDL_SetHintWithPriority(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "0", SDL_HINT_DEFAULT);
-@@ -1178,6 +1612,11 @@
+@@ -1255,6 +1699,11 @@
  		pixelWidth = windowWidth;
  		pixelHeight = windowHeight;
  	}
@@ -542,7 +557,7 @@
  
  	transform.guiWidth = static_cast<float>(SCREEN_WIDTH);
  	transform.guiHeight = static_cast<float>(SCREEN_HEIGHT);
-@@ -1303,6 +1742,17 @@
+@@ -1380,6 +1829,17 @@
  			static_cast<int>(guiCursorOffset * guiToPixelX * transform.pixelToWindowX));
  	}
  
@@ -560,7 +575,7 @@
  	if (!SDL_SetTextInputArea(s_sdlWindow, &textArea, cursorOffset)) {
  		common->DPrintf("SDL3: text input candidate area could not be updated: %s\n", SDL_GetError());
  	}
-@@ -1319,6 +1769,30 @@
+@@ -1396,6 +1856,52 @@
  	const bool consoleAcceptsText = console != NULL && console->Active();
  	const bool guiAcceptsText = SDL3_GetActiveGuiTextInputState(guiTextArea, guiCursorOffset);
  	const bool shouldAcceptText = win32.activeApp && (consoleAcceptsText || guiAcceptsText);
@@ -581,8 +596,30 @@
 +	 * the subscriber is OpenQ4_iOS_ApplyPendingTextInput, called from the
 +	 * display-link tick that already owns the SDL pump.
 +	 */
-+	s_iosTextInputWanted = shouldAcceptText ? 1 : 0;
-+	if (shouldAcceptText) {
++	// The touch keyboard policy above: a GUI field takes the keyboard after a
++	// tap on it, or at once when the player is not on touch.
++	static int seenTap = 0, seenDismiss = 0, tapFrames = 0;
++	static bool tapAllowed = false;
++	const int tapSerial = s_iosFieldTapSerial.load(std::memory_order_acquire);
++	const int dismissSerial = s_iosKeyboardDismissSerial.load(std::memory_order_acquire);
++	if (tapSerial != seenTap) { seenTap = tapSerial; tapFrames = 12; }
++	if (dismissSerial != seenDismiss) { seenDismiss = dismissSerial; tapAllowed = false; tapFrames = 0; }
++	if (!guiAcceptsText) {
++		tapAllowed = false;
++	} else if (!tapAllowed && tapFrames > 0) {
++		const float tx = s_iosFieldTapX.load(std::memory_order_relaxed), ty = s_iosFieldTapY.load(std::memory_order_relaxed);
++		const float slop = 6.0f;
++		if (tx >= guiTextArea.x - slop && tx <= guiTextArea.x + guiTextArea.w + slop &&
++				ty >= guiTextArea.y - slop && ty <= guiTextArea.y + guiTextArea.h + slop) {
++			tapAllowed = true;
++		}
++	}
++	if (tapFrames > 0) tapFrames--;
++	const bool guiKeyboard = guiAcceptsText &&
++		(tapAllowed || idKeyInput::LastInputWasController() || !idKeyInput::LastPointerWasTouch());
++	const bool wantKeyboard = win32.activeApp && (consoleAcceptsText || guiKeyboard);
++	s_iosTextInputWanted = wantKeyboard ? 1 : 0;
++	if (wantKeyboard) {
 +		SDL3_UpdateTextInputArea();
 +	}
 +	return;
@@ -591,7 +628,7 @@
  	if (shouldAcceptText && !s_sdlTextInputActive) {
  		if (SDL_StartTextInput(s_sdlWindow)) {
  			s_sdlTextInputActive = true;
-@@ -1834,7 +2308,7 @@
+@@ -1929,7 +2435,7 @@
  	return s_sdlGamepad != NULL || s_sdlJoystick != NULL;
  }
  
@@ -600,7 +637,7 @@
  	if (s_sdlGamepad) {
  		return SDL_RumbleGamepad(s_sdlGamepad, low, high, durationMsec);
  	}
-@@ -1842,6 +2316,34 @@
+@@ -1937,6 +2443,34 @@
  		return SDL_RumbleJoystick(s_sdlJoystick, low, high, durationMsec);
  	}
  	return false;
@@ -635,7 +672,7 @@
  }
  
  static void SDL3_ResetExpiredRumbleState(int now) {
-@@ -1876,8 +2378,17 @@
+@@ -1971,8 +2505,17 @@
  	Sys_LeaveCriticalSection(CRITICAL_SECTION_ONE);
  }
  
@@ -653,7 +690,7 @@
  	memset(s_gamepadButtonsDown, 0, sizeof(s_gamepadButtonsDown));
  	s_gamepadLeftTriggerDown = false;
  	s_gamepadRightTriggerDown = false;
-@@ -1923,9 +2434,187 @@
+@@ -2018,9 +2561,187 @@
  	if (rightDown != s_gamepadRightTriggerDown) {
  		s_gamepadRightTriggerDown = rightDown;
  		SDL3_PostControllerKeyEvent(K_JOY15, rightDown, eventTime);
@@ -841,7 +878,7 @@
  static void SDL3_UpdateGamepadAxes(int eventTime) {
  	if (!s_sdlGamepad) {
  		SDL3_ClearJoystickState();
-@@ -1964,14 +2653,34 @@
+@@ -2059,14 +2780,34 @@
  		lookX,
  		lookY);
  
@@ -879,7 +916,7 @@
  	Sys_EnterCriticalSection(CRITICAL_SECTION_ONE);
  	s_joystickAxisState[AXIS_SIDE] = lookX;
  	s_joystickAxisState[AXIS_FORWARD] = lookY;
-@@ -1988,6 +2697,99 @@
+@@ -2083,6 +2824,99 @@
  	SDL3_QueueControllerActivity(eventTime, activity);
  }
  
@@ -979,7 +1016,7 @@
  static void SDL3_UpdateJoystickAxes(void) {
  	if (!s_sdlJoystick) {
  		SDL3_ClearJoystickState();
-@@ -2018,6 +2820,7 @@
+@@ -2113,6 +2947,7 @@
  	int lookX = 0;
  	int lookY = 0;
  	int up = 0;
@@ -987,7 +1024,7 @@
  	SDL3_PublishRadialStick(
  		SDL3_GetJoystickAxisOrZero(hasDedicatedLookAxis ? lookAxisX : moveAxisX),
  		SDL3_GetJoystickAxisOrZero(hasDedicatedLookAxis ? lookAxisY : moveAxisY));
-@@ -2030,6 +2833,9 @@
+@@ -2125,6 +2960,9 @@
  		1.0f,
  		moveX,
  		moveY);
@@ -997,7 +1034,7 @@
  	moveY = -moveY;
  
  	if (hasDedicatedLookAxis) {
-@@ -2041,6 +2847,7 @@
+@@ -2136,6 +2974,7 @@
  			1.0f,
  			lookX,
  			lookY);
@@ -1005,10 +1042,14 @@
  		if (in_joystickInvertLook.GetBool()) {
  			lookY = -lookY;
  		}
-@@ -2056,13 +2863,33 @@
+@@ -2151,13 +2990,33 @@
  		up = -SDL3_NormalizeSignedAxis(SDL3_GetJoystickAxisOrZero(upAxisNegative), deadZone);
  	}
  
+-	Sys_EnterCriticalSection(CRITICAL_SECTION_ONE);
+-	s_joystickAxisState[AXIS_SIDE] = lookX;
+-	s_joystickAxisState[AXIS_FORWARD] = lookY;
+-	s_joystickAxisState[AXIS_UP] = up;
 +#if defined(__APPLE__) && TARGET_OS_IPHONE
 +	// In menus the two sticks do different jobs, which is what makes the
 +	// right-hand options panel reachable at all with a controller:
@@ -1029,10 +1070,7 @@
 +	const bool suppressForMenu = false;
 +#endif
 +
- 	Sys_EnterCriticalSection(CRITICAL_SECTION_ONE);
--	s_joystickAxisState[AXIS_SIDE] = lookX;
--	s_joystickAxisState[AXIS_FORWARD] = lookY;
--	s_joystickAxisState[AXIS_UP] = up;
++	Sys_EnterCriticalSection(CRITICAL_SECTION_ONE);
 +	s_joystickAxisState[AXIS_SIDE] = suppressForMenu ? 0 : lookX;
 +	s_joystickAxisState[AXIS_FORWARD] = suppressForMenu ? 0 : lookY;
 +	s_joystickAxisState[AXIS_UP] = suppressForMenu ? 0 : up;
@@ -1044,7 +1082,7 @@
  	Sys_LeaveCriticalSection(CRITICAL_SECTION_ONE);
  
  	const int activity = Max(Max(idMath::Abs(moveX), idMath::Abs(moveY)),
-@@ -2070,6 +2897,7 @@
+@@ -2165,6 +3024,7 @@
  	SDL3_QueueControllerActivity(Sys_Milliseconds(), activity);
  }
  
@@ -1052,10 +1090,31 @@
  static void SDL3_SetJoystickHat(Uint8 newHat, int eventTime) {
  	const Uint8 oldHat = s_joystickHatState;
  	const bool oldUp = (oldHat & SDL_HAT_UP) != 0;
-@@ -2427,6 +3255,95 @@
+@@ -2559,8 +3419,19 @@
+ 		const bool acceptsLoadingInput = openQ4_AcceptingLoadingContinueInput();
+ 		if (routed || acceptsLoadingInput) {
+ 			SDL3_QueueMouseButtonEvent(K_MOUSE1, down, eventTime, routed);
++		}
++	}
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++	// Where a menu tap landed, in GUI cursor units, for the keyboard policy.
++	if (up && routed) {
++		float tapX = 0.0f, tapY = 0.0f;
++		if (SDL3_MapWindowMouseToGuiCursor(windowMouseX, windowMouseY, tapX, tapY)) {
++			s_iosFieldTapX.store(tapX, std::memory_order_relaxed);
++			s_iosFieldTapY.store(tapY, std::memory_order_relaxed);
++			s_iosFieldTapSerial.fetch_add(1, std::memory_order_release);
+ 		}
+ 	}
++#endif
+ 	// A lifted finger leaves no pointer behind in the retained menus, so the
+ 	// control it touched does not stay lit as a hovered one (section 13.6).
+ 	if (up && routed && RetainedUI_IsOpen() && !(console && console->Active())) {
+@@ -2574,7 +3445,145 @@
+ 		s_touchscreenDeviceId = 0;
  	}
  }
- 
++
 +#if defined( __APPLE__ ) && TARGET_OS_IPHONE
 +/*
 + * A synthetic finger on a MENU, for the simulator (openQ4-ios D-086).
@@ -1079,7 +1138,14 @@
 +static std::atomic<float> s_menuTapY( 0.5f );
 +static int s_menuTapReleaseCountdown = 0;
 +static SDL_TouchFingerEvent s_menuTapRelease;
-+
++// `!menudrag` (D-123): a synthetic finger that presses at one point, moves to
++// another over a dozen frames and lifts — a list drag or a tab-strip swipe.
++static std::atomic<int>   s_menuDragPending( 0 );
++static std::atomic<float> s_menuDragX0( 0.5f ), s_menuDragY0( 0.5f ), s_menuDragX1( 0.5f ), s_menuDragY1( 0.5f );
++static int s_menuDragStep = -1;
++static SDL_TouchFingerEvent s_menuDragEvent;
++static const int SDL3_MENU_DRAG_STEPS = 12;
+ 
 +/*
 + * Main thread only: SDL_GetWindowSize and the whole finger handler are
 + * main-thread-only on Darwin, and the bridge that asks for a tap runs on the
@@ -1088,6 +1154,42 @@
 + * dispatched from.
 + */
 +static void SDL3_PumpMenuTapRelease(void) {
++	if (s_menuDragPending.exchange(0, std::memory_order_acquire) != 0 && s_sdlWindow) {
++		memset(&s_menuDragEvent, 0, sizeof(s_menuDragEvent));
++		s_menuDragEvent.type = SDL_EVENT_FINGER_DOWN;
++		s_menuDragEvent.timestamp = SDL_GetTicksNS();
++		s_menuDragEvent.touchID = 1;
++		s_menuDragEvent.fingerID = 0x4F513444;   // "OQ4D"
++		s_menuDragEvent.windowID = SDL_GetWindowID(s_sdlWindow);
++		s_menuDragEvent.x = s_menuDragX0.load(std::memory_order_relaxed);
++		s_menuDragEvent.y = s_menuDragY0.load(std::memory_order_relaxed);
++		s_menuDragEvent.pressure = 1.0f;
++		SDL3_HandleFingerEvent(s_menuDragEvent, Sys_Milliseconds());
++		s_menuDragStep = 0;
++		fprintf(stdout, "openQ4 menudrag: %.3f,%.3f -> %.3f,%.3f\n", (double)s_menuDragEvent.x, (double)s_menuDragEvent.y,
++				(double)s_menuDragX1.load(), (double)s_menuDragY1.load());
++		fflush(stdout);
++		return;
++	}
++	if (s_menuDragStep >= 0) {
++		s_menuDragStep++;
++		if (s_menuDragStep <= SDL3_MENU_DRAG_STEPS) {
++			const float t = (float)s_menuDragStep / (float)SDL3_MENU_DRAG_STEPS;
++			const float x0 = s_menuDragX0.load(), y0 = s_menuDragY0.load(), x1 = s_menuDragX1.load(), y1 = s_menuDragY1.load();
++			s_menuDragEvent.type = SDL_EVENT_FINGER_MOTION;
++			s_menuDragEvent.dx = x0 + (x1 - x0) * t - s_menuDragEvent.x;
++			s_menuDragEvent.dy = y0 + (y1 - y0) * t - s_menuDragEvent.y;
++			s_menuDragEvent.x = x0 + (x1 - x0) * t;
++			s_menuDragEvent.y = y0 + (y1 - y0) * t;
++			SDL3_HandleFingerEvent(s_menuDragEvent, Sys_Milliseconds());
++		} else {
++			s_menuDragEvent.type = SDL_EVENT_FINGER_UP;
++			s_menuDragEvent.dx = s_menuDragEvent.dy = 0.0f;
++			SDL3_HandleFingerEvent(s_menuDragEvent, Sys_Milliseconds());
++			s_menuDragStep = -1;
++		}
++		return;
++	}
 +	if (s_menuTapPending.exchange(0, std::memory_order_acquire) != 0 && s_sdlWindow) {
 +		SDL_TouchFingerEvent ev;
 +		memset(&ev, 0, sizeof(ev));
@@ -1137,6 +1239,12 @@
 + * posts a finger event; this runs the SAME handler with the same event, and
 + * skips only SDL's own delivery.
 + */
++extern "C" int OpenQ4_iOS_SynthesizeMenuDrag(float x0, float y0, float x1, float y1) {
++	s_menuDragX0.store(x0); s_menuDragY0.store(y0); s_menuDragX1.store(x1); s_menuDragY1.store(y1);
++	s_menuDragPending.store(1, std::memory_order_release);
++	return 1;
++}
++
 +extern "C" int OpenQ4_iOS_SynthesizeMenuTap(float nx, float ny) {
 +	s_menuTapX.store(nx, std::memory_order_relaxed);
 +	s_menuTapY.store(ny, std::memory_order_relaxed);
@@ -1148,7 +1256,7 @@
  static void SDL3_ReleaseFocusInputState(int eventTime) {
  	if (s_sdlFocusInputReleased) {
  		return;
-@@ -4074,7 +4991,70 @@
+@@ -4368,6 +5377,66 @@
  	return static_cast<int>(value);
  }
  
@@ -1212,6 +1320,12 @@
 +}
 +#endif
 +
+ // The window's safe area (SDL_GetWindowSafeArea, in window coordinates) as
+ // framebuffer-pixel insets. Desktop windows report the whole window: no inset.
+ static void SDL3_RefreshSafeArea( void ) {
+@@ -4388,6 +5457,9 @@
+ }
+ 
  static void SDL3_SetUIViewport( int x, int y, int width, int height ) {
 +#if defined( __APPLE__ ) && TARGET_OS_IPHONE
 +	SDL3_ApplyGuiSafeInsets( x, y, width, height );
@@ -1219,10 +1333,12 @@
  	engineWindowState.uiViewportX = x;
  	engineWindowState.uiViewportY = y;
  	engineWindowState.uiViewportWidth = width;
-@@ -4169,6 +5149,42 @@
- 	SDL3_SetUIViewport( 0, 0, pixelWidth, pixelHeight );
- }
+@@ -4481,7 +5553,43 @@
  
+ static void SDL3_UpdateFullWindowViewport(int pixelWidth, int pixelHeight) {
+ 	SDL3_SetUIViewport( 0, 0, pixelWidth, pixelHeight );
++}
++
 +#if defined(__APPLE__) && TARGET_OS_IPHONE
 +/*
 + * Apply a changed render scale between frames, from the engine thread.
@@ -1256,13 +1372,12 @@
 +	common->Printf( "iOS: render scale %d%% -> drawable %dx%d (native %dx%d)\n",
 +			(int)(scale * 100.0f + 0.5f), pixelWidth, pixelHeight,
 +			s_iosRawPixelWidth, s_iosRawPixelHeight );
-+}
+ }
 +#endif
-+
+ 
  static void SDL3_RecordWindowedPlacement(int x, int y, int width, int height) {
  	if (Sys_WindowPlacementLeaseActive() || width <= 0 || height <= 0) {
- 		return;
-@@ -4257,7 +5273,17 @@
+@@ -4571,7 +5679,17 @@
  		pixelHeight = height;
  	}
  
@@ -1280,7 +1395,7 @@
  		SDL3_SetVidSize( pixelWidth, pixelHeight );
  	}
  	const float uiDisplayScale = SDL_GetWindowDisplayScale(s_sdlWindow);
-@@ -4265,13 +5291,128 @@
+@@ -4579,13 +5697,131 @@
  	engineWindowState.pixelDensityX = width > 0 && pixelWidth > 0 ? static_cast<float>(pixelWidth) / width : 1.0f;
  	engineWindowState.pixelDensityY = height > 0 && pixelHeight > 0 ? static_cast<float>(pixelHeight) / height : 1.0f;
  
@@ -1340,12 +1455,15 @@
 +	common->Printf( "uiViewport   : %d,%d %dx%d\n",
 +			engineWindowState.uiViewportX, engineWindowState.uiViewportY,
 +			engineWindowState.uiViewportWidth, engineWindowState.uiViewportHeight );
++	// The renderer's view of the same state. v0.14.1's module-only client
++	// has no engine-side glConfig global any more; ask the render system.
++	const glconfig_t &rendererConfig = renderSystem->GetGLConfig();
 +	common->Printf( "glConfig ui  : %d,%d %dx%d\n",
-+			glConfig.uiViewportX, glConfig.uiViewportY,
-+			glConfig.uiViewportWidth, glConfig.uiViewportHeight );
++			rendererConfig.uiViewportX, rendererConfig.uiViewportY,
++			rendererConfig.uiViewportWidth, rendererConfig.uiViewportHeight );
 +	common->Printf( "engine vid   : %dx%d   glConfig vid: %dx%d\n",
 +			engineWindowState.vidWidth, engineWindowState.vidHeight,
-+			glConfig.vidWidth, glConfig.vidHeight );
++			rendererConfig.vidWidth, rendererConfig.vidHeight );
 +	common->Printf( "SDL window   : %dx%d pts, %dx%d px\n",
 +			windowWidth, windowHeight, pixelWidth, pixelHeight );
 +	common->Printf( "safe area    : l=%.4f t=%.4f r=%.4f b=%.4f  r_guiSafeInsets=%d\n",
@@ -1409,10 +1527,12 @@
  static void SDL3_PrintWaylandWindowState(const char *description) {
  	if (!s_sdlWindow || !SDL3_IsNativeWaylandVideoDriver()) {
  		return;
-@@ -4450,6 +5591,66 @@
+@@ -4779,6 +6015,66 @@
+ static bool SDL3_ApplyScreenParms(glimpParms_t parms) {
+ 	if (!s_sdlWindow) {
  		return false;
- 	}
- 
++	}
++
 +	/*
 +	 * The system-managed single-window platforms (uikit, android) have no
 +	 * screen parameters to apply, and applying them anyway is fatal
@@ -1471,12 +1591,10 @@
 +
 +		SDL3_RefreshWindowPlacement();
 +		return true;
-+	}
-+
+ 	}
+ 
  	if (parms.hiddenWindow) {
- 		parms.fullScreen = false;
- 		parms.borderless = false;
-@@ -4989,6 +6190,20 @@
+@@ -5373,6 +6669,20 @@
  		// already mutex-protected and the main loop keeps the pump fresh.
  		return false;
  	}
@@ -1497,7 +1615,7 @@
  	const bool gameWindowReady = s_sdlVideoReferenceHeld && s_sdlWindow;
  	if (!gameWindowReady) {
  		SDL3_ProcessPendingLifecycleEvents(Sys_Milliseconds());
-@@ -5610,6 +6825,20 @@
+@@ -6013,6 +7323,20 @@
  }
  
  void IN_ActivateMouse(void) {
@@ -1518,10 +1636,11 @@
  	if (!s_sdlWindow || !win32.in_mouse.GetBool() || SDL3_IsMouseCaptured()) {
  		return;
  	}
-@@ -5723,6 +6952,39 @@
+@@ -6125,6 +7449,39 @@
+ 
  void IN_Frame(void) {
  	win32.mouseGrabbed = SDL3_IsMouseCaptured();
- 
++
 +#if defined( __APPLE__ ) && TARGET_OS_IPHONE
 +	// D-085. The engine thread is the only writer of these cvars, and the only
 +	// reader of their modified flags; the refresh itself is left to the main
@@ -1554,11 +1673,10 @@
 +		s_uiViewportDirty.store( true, std::memory_order_release );
 +	}
 +#endif
-+
+ 
  	bool shouldGrab = true;
  	const bool routeMenuMouse = SDL3_ShouldRouteMenuMouse();
- 	const bool consoleActive = console != NULL && console->Active();
-@@ -6265,6 +7527,39 @@
+@@ -6668,6 +8025,33 @@
  bool Sys_SetJoystickRumble(float lowFrequency, float highFrequency, int durationMsec) {
  	const int now = Sys_Milliseconds();
  
@@ -1579,12 +1697,6 @@
 +	} else {
 +		s_rumbleStatSoundRun = 0;
 +	}
-+	// A gameplay pulse (fire / damage) outlives the per-frame sound updates.
-+	if (now < s_rumbleEventUntil) {
-+		lowFrequency = Max(lowFrequency, s_rumbleEventLow);
-+		highFrequency = Max(highFrequency, s_rumbleEventHigh);
-+		durationMsec = Max(durationMsec, s_rumbleEventUntil - now);
-+	}
 +	if (durationMsec > 0 && (lowFrequency > 0.0f || highFrequency > 0.0f)) {
 +		s_rumbleStatRequests++;
 +		if (!in_joystick.GetBool() || !in_joystickRumble.GetBool()) {
@@ -1598,43 +1710,13 @@
  	if (!in_joystick.GetBool() || !in_joystickRumble.GetBool() || durationMsec <= 0) {
  		if (s_joystickRumbleActive) {
  			SDL3_StopControllerRumble();
-@@ -6307,6 +7602,167 @@
+@@ -6708,7 +8092,136 @@
+ 	s_joystickRumbleUntilTime = untilTime;
+ 	s_joystickRumbleLastUpdateTime = now;
  	return true;
- }
- 
-+#if defined(__APPLE__) && TARGET_OS_IPHONE
-+/*
-+ * rumbleEvent <fire|damage> <strength 0..1> <msec> — a gameplay pulse, sent by
-+ * the game modules (overlay patches-game 0002). Scaled by the per-kind cvar,
-+ * then by in_joystickRumbleScale inside Sys_SetJoystickRumble like any rumble.
-+ */
-+static void SDL3_RumbleEvent_f(const idCmdArgs &args) {
-+	if (args.Argc() < 4) {
-+		common->Printf("usage: rumbleEvent <fire|damage> <strength 0..1> <msec>\n");
-+		return;
-+	}
-+	const bool isDamage = idStr::Icmp(args.Argv(1), "damage") == 0;
-+	const float kindScale = isDamage ? in_joystickRumbleDamage.GetFloat() : in_joystickRumbleFire.GetFloat();
-+	const float strength = SDL3_ClampUnit(atof(args.Argv(2)) * kindScale);
-+	const int msec = idMath::ClampInt(0, 1000, atoi(args.Argv(3)));
-+	s_rumbleStatEvents[isDamage ? 1 : 0]++;
-+	if (strength <= 0.0f || msec <= 0) {
-+		return;
-+	}
-+	const int now = Sys_Milliseconds();
-+	// Damage leans on the low (heavy) motor, a shot on the high (sharp) one.
-+	const float low = isDamage ? strength : strength * 0.55f;
-+	const float high = isDamage ? strength * 0.6f : strength;
-+	if (now >= s_rumbleEventUntil) {
-+		s_rumbleEventLow = 0.0f;
-+		s_rumbleEventHigh = 0.0f;
-+	}
-+	s_rumbleEventLow = Max(s_rumbleEventLow, low);
-+	s_rumbleEventHigh = Max(s_rumbleEventHigh, high);
-+	s_rumbleEventUntil = Max(s_rumbleEventUntil, now + msec);
-+	(void)Sys_SetJoystickRumble(0.0f, 0.0f, 1);
 +}
 +
++#if defined(__APPLE__) && TARGET_OS_IPHONE
 +static bool SDLCALL SDL3_VirtualRumble(void *userdata, Uint16 low, Uint16 high) {
 +	(void)userdata;
 +	s_rumbleVirtualCalls++;
@@ -1656,7 +1738,6 @@
 +	if (args.Argc() > 1 && idStr::Icmp(args.Argv(1), "reset") == 0) {
 +		s_rumbleStatRequests = s_rumbleStatNoTarget = s_rumbleStatDisabled = 0;
 +		s_rumbleStatSends = s_rumbleStatSendOk = s_rumbleStatSendFail = s_rumbleStatStops = 0;
-+		s_rumbleStatEvents[0] = s_rumbleStatEvents[1] = 0;
 +		s_rumbleStatSoundFrames = s_rumbleStatSoundRun = s_rumbleStatSoundRunMax = 0;
 +		s_rumbleStatSoundRuns = s_rumbleStatSoundStrong = 0;
 +		s_rumbleStatSoundPeak = 0.0f;
@@ -1677,13 +1758,14 @@
 +	const bool capTrigger = props != 0 && SDL_GetBooleanProperty(props, SDL_PROP_GAMEPAD_CAP_TRIGGER_RUMBLE_BOOLEAN, false);
 +	common->Printf("rumble: pad=%s name='%s' capRumble=%s capTriggerRumble=%s\n",
 +		kind, SDL3_NonEmptyString(name), props ? (capRumble ? "yes" : "NO") : "-", props ? (capTrigger ? "yes" : "no") : "-");
-+	common->Printf("rumble: in_joystick=%d in_joystickRumble=%d scale=%.2f s_controllerRumble=%s fire=%.2f damage=%.2f\n",
++	common->Printf("rumble: in_joystick=%d in_joystickRumble=%d scale=%.2f s_controllerRumble=%s (fire/damage pulses: upstream's, in_joystickRumbleLog 1 prints them)\n",
 +		in_joystick.GetBool() ? 1 : 0, in_joystickRumble.GetBool() ? 1 : 0, in_joystickRumbleScale.GetFloat(),
-+		cvarSystem->GetCVarString("s_controllerRumble"), in_joystickRumbleFire.GetFloat(), in_joystickRumbleDamage.GetFloat());
-+	common->Printf("rumble: requests=%d (noPad=%d disabled=%d) soundFrames=%d lastSoundAmp=%.2f %s events fire=%d damage=%d\n",
++		cvarSystem->GetCVarString("s_controllerRumble"));
++	// Since v0.15.0 Sys_SetJoystickRumble receives the MIX of sound rumble and
++	// gameplay pulses (sys_local.cpp), so these "sound" counters count both.
++	common->Printf("rumble: requests=%d (noPad=%d disabled=%d) mixedFrames=%d lastAmp=%.2f %s\n",
 +		s_rumbleStatRequests, s_rumbleStatNoTarget, s_rumbleStatDisabled, s_rumbleStatSoundFrames, s_rumbleStatLastSoundAmp,
-+		s_rumbleStatLastSoundTime ? va("(%d ms ago)", now - s_rumbleStatLastSoundTime) : "(never)",
-+		s_rumbleStatEvents[0], s_rumbleStatEvents[1]);
++		s_rumbleStatLastSoundTime ? va("(%d ms ago)", now - s_rumbleStatLastSoundTime) : "(never)");
 +	common->Printf("rumble: sound shape runs=%d longestRun=%d frames strong(>=0.5)=%d peak=%.2f mean=%.2f\n",
 +		s_rumbleStatSoundRuns, s_rumbleStatSoundRunMax, s_rumbleStatSoundStrong, s_rumbleStatSoundPeak,
 +		s_rumbleStatSoundFrames > 0 ? static_cast<float>(s_rumbleStatSoundSum / s_rumbleStatSoundFrames) : 0.0f);
@@ -1760,13 +1842,12 @@
 +	err = SDL_GetError();
 +	common->Printf("rumbleTest: triggers -> %s%s%s\n", trigOk ? "accepted by SDL" : "not available", trigOk ? "" : ": ", trigOk ? "" : SDL3_NonEmptyString(err));
 +	SDL3_RumbleStatus_f(args);
-+}
+ }
 +#endif
-+
+ 
  #ifndef ID_DEDICATED
  void Sys_PostVRControllerKey(int key, bool down) {
- 	const int eventTime = Sys_Milliseconds();
-@@ -6582,6 +8038,12 @@
+@@ -6985,6 +8498,11 @@
  		cmdSystem->AddCommand("listDisplays", SDL3_ListDisplays_f, CMD_FL_SYSTEM, "lists SDL3 displays and monitor indices");
  		cmdSystem->AddCommand("listDisplayModes", SDL3_ListDisplayModes_f, CMD_FL_SYSTEM, "lists SDL3 fullscreen display modes (optional display index)");
  		cmdSystem->AddCommand("listControllers", SDL3_ListControllers_f, CMD_FL_SYSTEM, "lists SDL3 controller, sensor, touchpad, and battery diagnostics");
@@ -1774,12 +1855,11 @@
 +		cmdSystem->AddCommand("uiviewport", SDL3_UIViewport_f, CMD_FL_SYSTEM, "prints the 2D UI viewport rect, safe-area insets and the virtual-screen transform");
 +		cmdSystem->AddCommand("rumbleStatus", SDL3_RumbleStatus_f, CMD_FL_SYSTEM, "controller rumble: pad, SDL capability, request/send counters and the last SDL result");
 +		cmdSystem->AddCommand("rumbleTest", SDL3_RumbleTest_f, CMD_FL_SYSTEM, "rumbleTest [low high msec] sends one raw pulse to the pad; rumbleTest virtual|novirtual attaches a counting SDL virtual pad");
-+		cmdSystem->AddCommand("rumbleEvent", SDL3_RumbleEvent_f, CMD_FL_SYSTEM, "rumbleEvent <fire|damage> <strength> <msec>: a gameplay rumble pulse (sent by the game)");
 +#endif
  		cmdSystem->AddCommand("sdl3MouseCaptureDiagnostics", SDL3_MouseCaptureDiagnostics_f, CMD_FL_SYSTEM, "toggles SDL3 mouse capture and prints backend state; optional repeat count is clamped to 1..8");
- 		s_sdlDiagnosticCommandsRegistered = true;
- 	}
-@@ -6673,6 +8135,14 @@
+ 		cmdSystem->AddCommand("windowMinimizeTest", SDL3_WindowMinimizeTest_f, CMD_FL_SYSTEM | CMD_FL_CHEAT, "development: minimize the game window, as leaving full screen does, so the frame cap of a window that shows nothing can be measured without input; requires cheats");
+ 		cmdSystem->AddCommand("windowFocusTest", SDL3_WindowFocusTest_f, CMD_FL_SYSTEM | CMD_FL_CHEAT, "development: request foreground focus once for an already visible windowed game window, or use report to identify it without changing focus; requires cheats and separate permission when automated");
+@@ -7078,6 +8596,14 @@
  
  		s_sdlWindow = SDL_CreateWindow(GAME_WINDOW_TITLE, parms->width, parms->height, flags);
  		if (!s_sdlWindow) {
@@ -1794,7 +1874,7 @@
  			return false;
  		}
  		s_sdlWindowSurfaceKind = requestedSurfaceKind;
-@@ -6723,6 +8193,11 @@
+@@ -7127,6 +8653,11 @@
  
  static void SDL3_WindowServices_RefreshNativeWindowHandles(renderModuleWindowInfo_t *outInfo) {
  	SDL3_UpdateNativeWindowHandles();
@@ -1806,7 +1886,7 @@
  	if (outInfo != NULL) {
  		SDL3_FillWindowInfo(outInfo);
  	}
-@@ -6929,10 +8404,50 @@
+@@ -7335,10 +8866,50 @@
  		return false;
  	}
  	VkSurfaceKHR surface = 0;

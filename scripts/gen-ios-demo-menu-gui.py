@@ -75,6 +75,16 @@ RECTS = {
     "demo_follow":                  "368,153,120,50",
     "demo_follow_disabled":         "368,153,120,50",
     "demo_stop":                    "496,153,76,50",
+    # v0.15.0 added marker Prev/Next and Auto-Track on a third line at y=171,
+    # inside row B at thumb size (they drew over 0.5x/1x/2x and Free/Follow).
+    # Like 0.25x/4x they get no room on a phone deck (D-123): multi-view
+    # extras, the seek bar and +/-10/30 s still move through a demo.
+    "demo_marker_prev_disabled":    "0,0,0,0",
+    "demo_marker_prev":             "0,0,0,0",
+    "demo_marker_next_disabled":    "0,0,0,0",
+    "demo_marker_next":             "0,0,0,0",
+    "demo_autotrack_disabled":      "0,0,0,0",
+    "demo_autotrack":               "0,0,0,0",
 }
 
 # Non-rect single-line substitutions: exact old line -> new line, each asserted

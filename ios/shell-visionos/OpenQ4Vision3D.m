@@ -70,6 +70,8 @@ extern int  OpenQ4_VK3D_Enabled(void);
 extern int  OpenQ4_VK3D_Frames(void);
 extern void OpenQ4_VK3D_SetStereo(float separation, float convergence, float gunDepth);
 extern void OpenQ4_VK3D_GetStereo(float *separation, float *convergence, float *gunDepth);
+// D-120: r_stereo3dGunScale, the weapon's depth-range scale.
+extern float OpenQ4_VK3D_GetGunScale(void);
 extern void OpenQ4_VK3D_SetEyeSize(int width, int height);
 extern void OpenQ4_VK3D_PresentSize(int *width, int *height);
 extern void OpenQ4_VK3D_GuiViewport(int *x, int *y, int *width, int *height);
@@ -964,7 +966,7 @@ void OpenQ4_Vision3D_DiagLine(char *buf, size_t size) {
 			 "layout=%s fov=%d fovWhy=%s fovLayout=%s rmaps=%d rmap=%dx%d/%dx%d "
 			 "drawable=%dx%d eye=%dx%d gui=%dx%d@%d,%d pairs=%d "
 			 "eyeL=%d eyeR=%d consumed=%d engineTick=%.2f/%.2f compTick=%.2f/%.2f "
-			 "gpuEye=n/a link=%s dim=%.2f sep=%.2f conv=%.0f gun=%.2f "
+			 "gpuEye=n/a link=%s dim=%.2f sep=%.2f conv=%.0f gun=%.2f gunScale=%.2f "
 			 "engineFrames=%d published=%d pubLatency=%d superseded=%d bypass=%d "
 			 "notReady=%d stalls=%d overruns=%d halfPairs=%d caps=%s "
 			 "curtain=%s raises=%d metalHidden=%d rehides=%d audio=%s "
@@ -994,7 +996,7 @@ void OpenQ4_Vision3D_DiagLine(char *buf, size_t size) {
 			 tickP50, tickP95,
 			 s.compP50, s.compP95,
 			 link,
-			 s.dim, sep, conv, gun,
+			 s.dim, sep, conv, gun, OpenQ4_VK3D_GetGunScale(),
 			 // engineFrames is what it says: EYE frames the engine rendered into
 			 // a present image (two per pair). published is the pairs that
 			 // reached the panel, and published*2/engineFrames is the health

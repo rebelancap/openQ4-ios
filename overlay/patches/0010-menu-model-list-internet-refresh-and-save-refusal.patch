@@ -1,27 +1,22 @@
 --- a/src/framework/Session_menu.cpp
 +++ b/src/framework/Session_menu.cpp
-@@ -1580,7 +1580,16 @@
+@@ -49,6 +49,10 @@
  
- 	const int numModels = declManager->GetNumDecls( DECL_PLAYER_MODEL );
- 	for ( int i = 0; i < numModels; ++i ) {
--		const rvDeclPlayerModel *playerModel = static_cast<const rvDeclPlayerModel *>( declManager->DeclByIndex( DECL_PLAYER_MODEL, i, true ) );
-+		// forceParse=false: this list needs only each model's name and display
-+		// name. Forcing a parse runs rvDeclPlayerModel's CacheMedia, which walks
-+		// the transitive entityDef media closure — heads, weapons, skins, gore
-+		// effects — i.e. building the main menu drags in most of the game's
-+		// texture set. Measured on an A19 Pro: 47 of the 70 seconds of startup.
-+		//
-+		// It is also loaded OUTSIDE level load, so each image is loaded
-+		// synchronously on the spot rather than batched at EndLevelLoad, and is
-+		// flagged referencedOutsideLevelLoad and never purged.
-+		const rvDeclPlayerModel *playerModel = static_cast<const rvDeclPlayerModel *>( declManager->DeclByIndex( DECL_PLAYER_MODEL, i, false ) );
- 		if ( !playerModel ) {
- 			continue;
- 		}
-@@ -1599,6 +1608,32 @@
- 	}
- }
+ #if defined( USE_SDL3 )
+ #include <SDL3/SDL.h>
++#endif
++
++#if defined( __APPLE__ ) && TARGET_OS_IPHONE
++extern "C" void OpenQ4_iOS_ShowModPicker( void );	// ios/shell/openq4_ios_settings.m (D-123)
+ #endif
  
+ static bool Session_AndroidSetupAvailable() {
+@@ -1857,6 +1861,32 @@
+ 	MainMenuBuildModelChoices( isTeamGame, menuModelTeam, values, names );
+ 	buildValues.Clear(); buildNames.Clear();
+ 	for ( int i = 0; i < values.Num(); ++i ) MainMenuAppendModelChoice( buildValues, buildNames, values[i].c_str(), names[i].c_str() );
++}
++
 +/*
 +==============
 +MainMenuReadEntityDefWithoutMedia
@@ -46,12 +41,10 @@
 +		const_cast<idDecl *>( decl )->Invalidate();
 +	}
 +	return true;
-+}
-+
+ }
+ 
  static void SetMainMenuMPModelVars( idUserInterface *gui ) {
- 	if ( !gui ) {
- 		return;
-@@ -1608,15 +1643,37 @@
+@@ -1868,15 +1898,37 @@
  	const int menuModelTeam = MainMenuResolveModelTeam();
  	MainMenuSyncMPSettingsGuiState( gui, menuModelTeam );
  
@@ -97,7 +90,7 @@
  
  	idStr buildValues;
  	idStr buildNames;
-@@ -1630,9 +1687,9 @@
+@@ -1890,9 +1942,9 @@
  	const char *selectedModelDecl = cvarSystem->GetCVarString( modelCVar.c_str() );
  	if ( ( !selectedModelDecl || !selectedModelDecl[0] ) && def ) {
  		if ( menuModelTeam >= 0 && menuModelTeam < 2 ) {
@@ -109,8 +102,8 @@
  		}
  	}
  
-@@ -1660,12 +1717,12 @@
- 	}
+@@ -1925,12 +1977,12 @@
+ 	declManager->FindType( DECL_ENTITYDEF, "weapon_blaster_gui", false );
  
  	if ( !selectedModelName.Length() && def ) {
 -		selectedModelName = def->dict.GetString( "model" );
@@ -126,21 +119,21 @@
  	}
  
  	if ( selectedModelName.Length() || selectedHeadName.Length() || selectedSkinName.Length() ) {
-@@ -2365,6 +2422,13 @@
- 	fileSystem->CloseFile( file );
- 	return valid;
+@@ -3659,6 +3711,13 @@
+ 	details.playSeconds = played != NULL ? Max( 0, atoi( played->GetValue() ) ) : -1;
+ 	return true;
  }
++#endif
 +
 +#if defined( __APPLE__ ) && TARGET_OS_IPHONE
 +// D-114, Session.cpp / openq4_ios_loc.m.
 +int Session_iOS_ProbeSaveGame( const char *slotName, idStr *mapOut, idStr *entityFilterOut, idDict *playerInfoOut );
 +void Session_iOS_ExplainLoadRefusal( const char *slotName );
 +extern "C" const char *OpenQ4_iOS_SaveText( int which );
-+#endif
+ #endif
  
  static bool Session_MenuReadSaveDescription( const idStr &slotName, sessionMenuSaveDescription_t &description ) {
- 	description.saveName.Clear();
-@@ -2507,7 +2571,38 @@
+@@ -3830,7 +3889,38 @@
  		return;
  	}
  
@@ -179,7 +172,7 @@
  	guiActive->SetStateString( "saveGameDescription", "" );
  	guiActive->SetStateString( "saveGameDate", "" );
  	guiActive->SetStateString( "saveGameTime", "" );
-@@ -2524,6 +2619,16 @@
+@@ -3847,6 +3937,16 @@
  		} else {
  			name = loadGameList[i];
  		}
@@ -196,7 +189,7 @@
  
  		guiActive->SetStateString( va("loadgame_item_%i", i), name);
  	}
-@@ -2727,7 +2832,18 @@
+@@ -4057,7 +4157,18 @@
  	if ( !idStr::Icmp( cmd, "loadGame" ) ) {
  		int choice = guiActive->State().GetInt("loadgame_sel_0");
  		if ( choice >= 0 && choice < loadGameList.Num() ) {
@@ -215,19 +208,18 @@
  		}
  		return true;
  	}
-@@ -3246,7 +3362,14 @@
- 			if ( guiActive->State().GetBool( "lanSet" ) ) {
- 				cmdSystem->BufferCommandText( CMD_EXEC_NOW, "LANScan" );
- 			} else {
--				idAsyncNetwork::client.serverList.NetScan( );
-+				// openQ4-ios overlay (upstreaming candidate): re-ask the master.
-+				// NetScan() only re-pings the addresses already stored, so
-+				// Refresh on the Internet tab could never discover a server
-+				// that came up after the tab was opened — and, worse, it was
-+				// the only button a user would press after a failed first
-+				// query, when the stored list is empty and re-pinging nothing
-+				// is a no-op. GetNETServers() clears, re-queries and re-pings.
-+				idAsyncNetwork::GetNETServers();
- 			}
- 			continue;
- 		}
+@@ -8388,6 +8499,14 @@
+ 	// no MODS. A row selects its mod, and LOAD MOD restarts the engine into it
+ 	// as the stock LOAD MOD does.
+ 	if ( !idStr::Icmp( request, "mods" ) && guiRetainedHome == guiRetainedTitle ) {
++#if defined( __APPLE__ ) && TARGET_OS_IPHONE
++		// openQ4-ios (D-123, Q-040): MODS opens the shell's Mods page (the gear's,
++		// which picks the mod for the next launch). LOAD MOD here would reload the
++		// engine in place, which iOS cannot do (Com_ReloadEngine_f).
++		common->Printf( "iOS: MODS opens the iOS Mods page\n" );
++		OpenQ4_iOS_ShowModPicker();
++		return;
++#endif
+ 		PublishRetainedMods( guiRetainedHome );
+ 		guiRetainedHome->HandleNamedEvent( "modsModalShow" );
+ 		return;

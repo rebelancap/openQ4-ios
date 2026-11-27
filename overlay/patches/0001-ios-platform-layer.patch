@@ -1,8 +1,8 @@
---- a/src/sys/osx/macosx_compat.mm
-+++ b/src/sys/osx/macosx_compat.mm
-@@ -31,8 +31,37 @@
- 
+--- a/src/sys/macos/macos_compat.mm
++++ b/src/sys/macos/macos_compat.mm
+@@ -32,8 +32,37 @@
  #include "../posix/posix_public.h"
+ #include "openq4_paks_generated.h"
  
 +#import <TargetConditionals.h>
 +#if TARGET_OS_IPHONE
@@ -38,7 +38,7 @@
  #import <mach-o/dyld.h>
  #import <mach/mach_time.h>
  #import <pthread.h>
-@@ -696,6 +725,22 @@
+@@ -710,6 +739,22 @@
  	}
  	moduleRootPath[0] = '\0';
  
@@ -61,7 +61,7 @@
  	idStr exeDirectory = Sys_EXEPath();
  	if ( exeDirectory.Length() <= 0 ) {
  		return false;
-@@ -710,6 +755,7 @@
+@@ -724,6 +769,7 @@
  	}
  
  	return Sys_CopyPathIfFits( moduleRootPath, moduleRootSize, moduleRoot.c_str() );
@@ -69,7 +69,7 @@
  }
  
  /*
-@@ -748,6 +794,26 @@
+@@ -762,6 +808,26 @@
  ==============
  */
  const char *Sys_DefaultSavePath( void ) {
@@ -96,7 +96,7 @@
  	idStr home;
  	if ( Sys_GetMacOSHomeDirectory( home ) ) {
  		idStr candidate = home;
-@@ -959,6 +1025,31 @@
+@@ -973,6 +1039,31 @@
  ================
  */
  int Sys_GetVideoRam( void ) {
@@ -128,7 +128,7 @@
  	CGLRendererInfoObj rendererInfo = NULL;
  	GLint rendererCount = 0;
  	unsigned long maxVRAM = 0;
-@@ -1006,6 +1097,7 @@
+@@ -1020,6 +1111,7 @@
  
  	(void)CGLDestroyRendererInfo( rendererInfo );
  	return static_cast<int>( Min( maxVRAM, static_cast<unsigned long>( idMath::INT_MAX ) ) );
@@ -136,8 +136,8 @@
  }
  
  /*
---- a/src/sys/osx/macosx_misc.mm
-+++ b/src/sys/osx/macosx_misc.mm
+--- a/src/sys/macos/macos_misc.mm
++++ b/src/sys/macos/macos_misc.mm
 @@ -27,8 +27,13 @@
  */
  
@@ -194,8 +194,8 @@
  
  	if ( doexit ) {
  		quit_spamguard = true;
---- a/src/sys/osx/macosx_sdl3.cpp
-+++ b/src/sys/osx/macosx_sdl3.cpp
+--- a/src/sys/macos/macos_sdl3.cpp
++++ b/src/sys/macos/macos_sdl3.cpp
 @@ -12,7 +12,10 @@
  #include "../../idlib/precompiled.h"
  #include "../../renderer/tr_local.h"
@@ -223,8 +223,8 @@
  	return 0;
  }
 +#endif
---- a/src/sys/osx/macosx_sys.h
-+++ b/src/sys/osx/macosx_sys.h
+--- a/src/sys/macos/macos_sys.h
++++ b/src/sys/macos/macos_sys.h
 @@ -1,9 +1,16 @@
  #import "../posix/posix_public.h"
  
@@ -241,7 +241,7 @@
 +#endif
  
  // Native GL context state for the legacy native backend lives in
- // macosx_native_gl.h so the SDL3 release path never sees those tokens
+ // macos_native_gl.h so the SDL3 release path never sees those tokens
 @@ -16,7 +23,9 @@
  // In macosx_input.m
  void Sys_InitInput(void);

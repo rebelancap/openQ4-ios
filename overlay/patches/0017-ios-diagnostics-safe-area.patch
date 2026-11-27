@@ -12,8 +12,8 @@
 +#endif
  #include "Session_local.h"
  #include "ConsoleCompletion.h"
- #include "NativeInputPublications.h"
-@@ -1090,6 +1096,63 @@
+ #include "ConsoleInput.h"
+@@ -1101,6 +1107,63 @@
  SCR_DrawTextRightAlign
  ==================
  */
@@ -77,7 +77,7 @@
  void SCR_DrawTextRightAlign( float &y, const char *text, ... ) {
  	char string[MAX_STRING_CHARS];
  	va_list argptr;
-@@ -1098,8 +1161,18 @@
+@@ -1109,8 +1172,18 @@
  	va_end( argptr );
  	const float charWidth = localConsole.GetSmallCharWidth() * SCR_DIAGNOSTIC_TEXT_SCALE;
  	const float charHeight = SMALLCHAR_HEIGHT * SCR_DIAGNOSTIC_TEXT_SCALE;
@@ -98,7 +98,7 @@
  	y += SCR_DiagnosticLineAdvance( charHeight );
  }
  
-@@ -1149,10 +1222,29 @@
+@@ -1160,10 +1233,29 @@
  	}
  
  	if ( fps >= 0 ) {

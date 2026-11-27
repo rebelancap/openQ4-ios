@@ -27,6 +27,10 @@
 #include "openq4_ios_settings.h"
 #include "openq4_ios_loc.h"
 #include "openq4_ios_bridge.h"
+#include <stdatomic.h>
+
+// Bottom of the top-band chrome in window points, for the retained HUD (D-123).
+static _Atomic float g_hudTopPoints = 0.0f;
 /*
  * Engine entry point for D-085's safe-area insets. Declared here rather than
  * through a header because it lives in the ENGINE (overlay patch 0005,
@@ -107,6 +111,7 @@ static int g_forcePad = -1;
 - (NSString *)layoutDescription;
 - (void)synthesizeTapAtNormalizedX:(CGFloat)nx y:(CGFloat)ny;
 - (UIButton *)chromeButtonNamed:(NSString *)key;
+- (void)dismissKeyboard;
 // Gyro aim (D-083).
 - (void)pollGyro;
 - (int)injectSyntheticGyroYaw:(float)yawDegrees pitch:(float)pitchDegrees;
@@ -410,6 +415,16 @@ static int g_forcePad = -1;
 }
 
 - (void)dismissKeyboard {
+	// Done finishes the entry the way the keyboard's own Return does (D-123).
+	// The retained menus keep a typed name as an uncommitted draft until
+	// Return: with the keyboard merely put away, SAVE GAME (or any button that
+	// needs the field) refocuses the field and the keyboard comes straight back
+	// instead of acting, so Done would look broken. Return commits — on the
+	// save page that also saves under the typed name, as Return always has.
+	OpenQ4_iOS_InjectKeyNamed("ENTER", 2);
+	// And the field gives the keyboard back only on the next tap on it
+	// (sdl3_backend.cpp's touch keyboard policy), not on its own.
+	OpenQ4_iOS_NoteKeyboardDismissed();
 	// Ask SDL to stop text input as well as resigning first responder: SDL
 	// re-presents the keyboard on its own if it still believes text input is
 	// active, which is why it reappeared on returning to the menu.
@@ -870,10 +885,30 @@ static NSString *OpenQ4_LayoutKey(NSString *action) {
 		}
 	}
 	[self applyAppearance];
+	[self publishHudTop];
 	// The chrome above was just placed inside self.safeAreaInsets; the engine's
 	// 2D UI viewport is inset by the SAME numbers (D-085), and this is the one
 	// callback that fires whenever they can have changed.
 	OpenQ4_iOS_PublishSafeArea();
+}
+
+/*
+ * Where the retained HUD's top readouts must start (D-123): below the lowest
+ * chrome button in the top band (the hamburger, objectives and gear sit at the
+ * top corners, and the Remastered HUD puts its scoreboard and kill feed in the
+ * same corners). Upstream's Android port does exactly this with its touch
+ * plates (RetainedHud.cpp AndroidTouchControls_HudTop); the iOS hook feeds the
+ * same code. Window points; 0 when no chrome is in the top band.
+ */
+- (void)publishHudTop {
+	const CGFloat band = self.bounds.size.height / 3.0;
+	CGFloat bottom = 0;
+	for (NSString *key in _chrome) {
+		UIButton *b = _chrome[key];
+		if (b.hidden || b.alpha < 0.01 || CGRectGetMinY(b.frame) > band) { continue; }
+		bottom = MAX(bottom, CGRectGetMaxY(b.frame) + 4.0);
+	}
+	atomic_store(&g_hudTopPoints, (float)bottom);
 }
 
 - (void)applyAppearance {
@@ -2115,6 +2150,14 @@ void OpenQ4_iOS_TouchSetVisible(int visible) {
  * provable on the simulator. Names match the layout keys: "pause" (hamburger),
  * "objectives", "settings" (gear). Returns 0 if there is no such button.
  */
+float OpenQ4_iOS_TouchHudTop(void) {
+	return atomic_load(&g_hudTopPoints);
+}
+
+void OpenQ4_iOS_TouchDismissKeyboard(void) {
+	dispatch_async(dispatch_get_main_queue(), ^{ [g_touchView dismissKeyboard]; });
+}
+
 int OpenQ4_iOS_TouchPressChrome(const char *name) {
 	if (name == NULL) {
 		return 0;

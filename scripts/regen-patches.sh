@@ -25,8 +25,8 @@ cd "$ROOT"
 # Unix group IDs, and assigning an array to it silently does nothing — the
 # assignment appears to work and every lookup then misses.
 PATCH_GROUPS=(
-	"0001-ios-platform-layer.patch:src/sys/osx/macosx_compat.mm src/sys/osx/macosx_misc.mm src/sys/osx/macosx_sdl3.cpp src/sys/osx/macosx_sys.h"
-	"0002-ios-display-link-main-loop.patch:src/sys/osx/macosx_sdl3_main.cpp"
+	"0001-ios-platform-layer.patch:src/sys/macos/macos_compat.mm src/sys/macos/macos_misc.mm src/sys/macos/macos_sdl3.cpp src/sys/macos/macos_sys.h"
+	"0002-ios-display-link-main-loop.patch:src/sys/macos/macos_sdl3_main.cpp"
 	"0003-ios-static-renderer-module.patch:src/renderer/RendererModule.cpp"
 	"0004-ios-static-module-glue.patch:src/renderer/RendererGLModule.cpp"
 	"0005-sdl3-backend-ios-input-text-mouse-gui-safe-area-and-screen-parms.patch:src/sys/sdl3/sdl3_backend.cpp"
@@ -57,7 +57,9 @@ PATCH_GROUPS=(
 	# build tree is invisible to it and `diff` would fail on the missing
 	# pristine side. Grep the patch for OPENQ4_VISIONOS_3D to review it alone.
 	"0019-vulkan-backend-timers-live-swapchain-extent-and-stereo-present.patch:src/renderer/Vulkan/vk_GuiExecutor.cpp src/renderer/Vulkan/vk_Backend.cpp"
-	"0020-vulkan-warn-inert-screen-fraction.patch:src/renderer/RenderSystem.cpp"
+	# 0020 (warn that r_screenFraction is inert under Vulkan) was retired by
+	# D-118: v0.14.1 scales the scene on every backend (PushSceneResolutionScale,
+	# vkSceneScaleState), and the warning's local no longer exists.
 	"0021-vulkan-swapchain-extent-recreate-accounting-and-pipeline-cache-checkpoint.patch:src/renderer/Vulkan/VulkanDevice.cpp src/renderer/Vulkan/VulkanDevice.h"
 	"0022-build-string-names-the-apple-platform.patch:src/sys/sys_public.h"
 	# The GPU pass-timing instrument lives in 0019 with the CPU stage timers it
@@ -90,11 +92,35 @@ PATCH_GROUPS=(
 	# thread, so the engine thread adopts ownership once (called from
 	# ios/shell/openq4_ios_bridge.m before its first frame).
 	"0029-ios-renderer-owner-follows-the-engine-thread.patch:src/renderer/RendererResourceSettings.cpp"
-	# D-116: saves from 1.0.0 (payload v3) restore on v0.14. A saved GUI's blob
-	# is read through the GUI file that wrote it (table + ui_legacySaveShapes);
-	# the session side (payload version handed over, failed restore -> D-114
-	# rescue) rides in 0009, which owns Session.cpp.
-	"0030-restore-older-save-payloads-through-legacy-gui-shapes.patch:src/ui/UserInterface.cpp"
+	# 0030 (D-116's legacy GUI shapes for 1.0.0 saves) was retired by D-118:
+	# v0.14.1 reads older GUI records through its own revision table
+	# (SaveGameReleases.h OPENQ4_SAVEGAME_GUI_REVISIONS, guis/savecompat/ in
+	# pak0). What upstream cannot know is that our shipped builds stamped
+	# hash-derived build numbers; 0031 maps those two stamps to the real builds.
+	"0031-read-shipped-ios-save-stamps-as-their-upstream-builds.patch:src/framework/SaveGameReleases.h"
+	# D-118: v0.14.1 binds more owners to the thread that ran common->Init (the
+	# print queue, the filesystem pacifier, event disposition, retained-UI edits,
+	# the GUI manager's native presence). The iOS engine thread adopts them all
+	# before its first frame, as 0029 does for the renderer. The orchestrator
+	# (OpenQ4_iOS_AdoptEngineThreadIdentity) and the Common/FileSystem halves
+	# ride in 0007 and 0011, which own those files.
+	"0032-ios-engine-thread-adopts-the-main-thread-owners.patch:src/sys/EventDisposition.cpp src/ui/RetainedUI.cpp src/ui/UserInterface.cpp src/ui/UserInterfaceLocal.h"
+	# D-122 (v0.15.0): the in-game updater never fetches or installs on
+	# iOS/visionOS; the Updates button explains that updates come via SideStore/OTA.
+	"0033-ios-in-game-updater-is-inert.patch:src/framework/Updater.cpp"
+	# 1.1.0.5 (D-123): the retained UI's view canvases are bound to the thread
+	# that constructed them; those made during init (title menu and siblings)
+	# were bound to main, so on the engine thread every view reported a busy
+	# canvas and nothing prepared or drew (the black main menu). The engine
+	# thread re-binds them in 0032's RetainedUI_iOS_AdoptEditThread; the
+	# re-bind entry point lives here.
+	"0034-ios-retained-ui-canvases-follow-the-engine-thread.patch:src/ui/retained/Runtime.cpp src/ui/retained/Runtime.h"
+	# 1.1.0.5 (D-123): the Remastered HUD's top readouts clear the shell's
+	# top-corner chrome, through upstream's own Android touch-plate rule.
+	"0035-ios-retained-hud-clears-the-touch-chrome.patch:src/ui/RetainedHud.cpp"
+	# 1.1.0.5 (D-123): a fatal signal prints its backtrace on iOS (the handler
+	# _exit()s, so the OS writes no crash report and the stack was lost).
+	"0036-ios-fatal-signal-backtrace.patch:src/sys/posix/posix_signal.cpp"
 )
 
 # The same table for the SDK-EULA game sources (D-070). Until v0.13.x they were
@@ -104,7 +130,24 @@ PATCH_GROUPS=(
 # a separate set because they modify SDK-EULA code, not GPL code.
 GAME_PATCH_GROUPS=(
 	"0001-in-world-gui-touch-ray.patch:src/game/Player.cpp src/mpgame/Player.cpp"
-	"0002-pad-rumble-on-fire-and-damage.patch:src/game/PlayerView.cpp src/mpgame/PlayerView.cpp"
+	# 0002 (pad rumble on fire and damage, D-111) was retired by the v0.15.0 pin
+	# bump (D-122): upstream now pulses the pad on fire and damage itself
+	# (idPlayer::VRVibrate -> Sys_PulseJoystickRumble); keeping ours would rumble twice.
+	# D-119: one "Game Saved..." notice (HUD or objective system, not both).
+	"0003-one-save-notice.patch:src/game/Game_local.cpp"
+	# D-119: the port's own pre-1.0.0 payload-v2 saves are read in their native layout.
+	"0004-read-the-ports-own-v2-saves-natively.patch:src/game/gamesys/SaveGame.cpp src/mpgame/gamesys/SaveGame.cpp"
+	# D-122: the sound world's liquid test answers "no" when no map is loaded
+	# (a render demo replayed after a game map crashed in idGameLocal::Contents).
+	"0005-liquid-sound-test-without-a-map.patch:src/game/PlayerView.cpp src/mpgame/PlayerView.cpp"
+	# D-123: MP state that outlived a game reload on iOS (the module stays mapped):
+	# the retained menu's published dict (stale pool strings) and the buying
+	# manager's cached constants decls (stale decl pointers) are forgotten with the game.
+	"0006-mp-state-forgotten-with-the-game-on-a-mapped-module.patch:src/mpgame/MultiplayerGame.cpp src/mpgame/mp/Buying.cpp src/mpgame/mp/Buying.h"
+	# D-123: the animated crosshair's canvas (a function-local static) cached the
+	# _white material across a game reload: a freed decl on a mapped module
+	# (SIGSEGV in DrawHudPrimitives after an SP <-> MP switch). Shared .inl, both modules.
+	"0007-crosshair-canvas-looks-up-its-material-each-frame.patch:src/game/gamesys/AnimatedCrosshair.inl"
 )
 
 CLAIMED=""
@@ -115,7 +158,7 @@ done
 echo "==> checking every edited file is assigned to a patch"
 # -q so identical files cost nothing; the tree is ~2500 files.
 # src/game and src/mpgame are the game set below (in-tree since v0.14, D-116).
-EDITED="$(cd vendor/openQ4 && find src \( -path src/game -o -path src/mpgame \) -prune -o -type f \( -name '*.cpp' -o -name '*.h' -o -name '*.mm' -o -name '*.m' \) -print | sort | while read -r f; do
+EDITED="$(cd vendor/openQ4 && find src \( -path src/game -o -path src/mpgame \) -prune -o -type f \( -name '*.cpp' -o -name '*.h' -o -name '*.inl' -o -name '*.mm' -o -name '*.m' \) -print | sort | while read -r f; do
 	if [ -f "$ROOT/build/src-ios/$f" ] && ! cmp -s "$ROOT/vendor/openQ4/$f" "$ROOT/build/src-ios/$f"; then
 		echo "$f"
 	fi
@@ -190,7 +233,7 @@ for g in "${GAME_PATCH_GROUPS[@]}"; do
 done
 
 echo "==> checking every edited game file is assigned to a patch"
-GAME_EDITED="$(cd vendor/openQ4 && find src/game src/mpgame -type f \( -name '*.cpp' -o -name '*.h' \) -print | sort | while read -r f; do
+GAME_EDITED="$(cd vendor/openQ4 && find src/game src/mpgame -type f \( -name '*.cpp' -o -name '*.h' -o -name '*.inl' \) -print | sort | while read -r f; do
 	if [ -f "$ROOT/$GAME_STAGE/$f" ] && ! cmp -s "$ROOT/vendor/openQ4/$f" "$ROOT/$GAME_STAGE/$f"; then
 		echo "$f"
 	fi

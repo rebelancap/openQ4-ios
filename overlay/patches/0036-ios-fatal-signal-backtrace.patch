@@ -1,0 +1,35 @@
+--- a/src/sys/posix/posix_signal.cpp
++++ b/src/sys/posix/posix_signal.cpp
+@@ -29,6 +29,12 @@
+ #include "posix_public.h"
+ #include "../../renderer/RendererStartupDiagnostics.h"
+ #include "../../framework/GameModuleDiagnostics.h"
++#if defined( __APPLE__ )
++#include <TargetConditionals.h>
++#if TARGET_OS_IPHONE
++#include <execinfo.h>
++#endif
++#endif
+ 
+ // module-only clients carry no renderer TUs; the crash breadcrumb loses the
+ // startup-phase detail rather than reaching into the module from a signal
+@@ -235,6 +241,19 @@
+ 		Posix_AppendFatalBreadcrumbRaw( fatalBreadcrumb );
+ 	}
+ 
++#if defined( __APPLE__ ) && TARGET_OS_IPHONE
++	// openQ4-ios (D-123): the faulting stack, image + offset + symbol per frame
++	// (the game modules keep their symbols), to stderr and the launch log. A
++	// fatal signal is caught and _exit()ed here, so iOS writes no crash report
++	// of its own: without this a signal death left only its name.
++	{
++		void *frames[ 64 ];
++		const int count = backtrace( frames, 64 );
++		Posix_WriteSignalText( "openQ4: fatal signal backtrace:\n" );
++		backtrace_symbols_fd( frames, count, STDERR_FILENO );
++	}
++#endif
++
+ 	_exit( 128 + signum );
+ }
+ 

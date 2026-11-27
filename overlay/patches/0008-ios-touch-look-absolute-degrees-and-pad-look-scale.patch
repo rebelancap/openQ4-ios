@@ -1,7 +1,7 @@
 --- a/src/framework/UsercmdGen.cpp
 +++ b/src/framework/UsercmdGen.cpp
-@@ -37,6 +37,13 @@
- #include "../sys/android/android_public.h"
+@@ -40,6 +40,13 @@
+ #include "TouchInput.h"
  #endif
  
 +#if defined( __APPLE__ )
@@ -14,7 +14,7 @@
  static const float MOUSE_CPI_INCHES_PER_CM = 2.5399999618530273f;
  static const float MOUSE_CPI_VIEW_SCALE = 45.45454545454546f;
  static const int MOUSE_FILTER_SAMPLES = 32;
-@@ -415,6 +422,13 @@
+@@ -425,6 +432,13 @@
  	void			KeyMove( void );
  	void			JoystickMove( void );
  	void			MouseMove( void );
@@ -28,7 +28,7 @@
  	float			NormalizeMouseDeltasForCpi( float &mx, float &my, float &strafeMx, float &strafeMy ) const;
  	float			CalculateMouseSensitivity( float mx, float my, float *debugRate, float *debugPower ) const;
  	float			GetZoomLookSensitivityScale( void ) const;
-@@ -516,6 +530,32 @@
+@@ -539,6 +553,32 @@
  idCVar idUsercmdGenLocal::in_angleSpeedKey( "in_anglespeedkey", "1.5", CVAR_SYSTEM | CVAR_ARCHIVE | CVAR_FLOAT, "angle change scale when holding down _speed button" );
  idCVar idUsercmdGenLocal::in_freeLook( "in_freeLook", "1", CVAR_SYSTEM | CVAR_ARCHIVE | CVAR_BOOL, "look around with mouse (reverse _mlook button)" );
  idCVar idUsercmdGenLocal::in_alwaysRun( "in_alwaysRun", "1", CVAR_SYSTEM | CVAR_ARCHIVE | CVAR_BOOL, "always run (reverse _speed button)" );
@@ -61,7 +61,7 @@
  static idCVar in_runDefaultMigrated( "in_runDefaultMigrated", "0", CVAR_SYSTEM | CVAR_ARCHIVE | CVAR_BOOL, "one-time migration flag for legacy openQ4 run defaults" );
  idCVar idUsercmdGenLocal::in_toggleRun( "in_toggleRun", "0", CVAR_SYSTEM | CVAR_ARCHIVE | CVAR_BOOL, "pressing _speed button toggles run on/off - only in MP" );
  idCVar idUsercmdGenLocal::in_toggleCrouch( "in_toggleCrouch", "0", CVAR_SYSTEM | CVAR_ARCHIVE | CVAR_BOOL, "pressing _movedown button toggles player crouching/standing" );
-@@ -1097,8 +1137,155 @@
+@@ -1144,8 +1184,155 @@
  	}
  
  	EndMouseFilter();
@@ -217,7 +217,7 @@
  /*
  =================
  idUsercmdGenLocal::JoystickMove
-@@ -1162,11 +1349,52 @@
+@@ -1209,11 +1396,52 @@
  		joystickLookSensitivity = 1.0f;
  	}
  
@@ -273,9 +273,9 @@
  	}
  
  	if ( hasDedicatedLookAxis ) {
-@@ -1299,6 +1527,12 @@
- 		// get basic movement from joystick
- 		JoystickMove();
+@@ -1375,6 +1603,12 @@
+ 		viewangles[PITCH] += touch.pitch * touchZoomScale;
+ #endif
  
 +#if defined( __APPLE__ ) && TARGET_OS_IPHONE
 +		// touch look, in absolute view degrees
@@ -286,7 +286,7 @@
  		// check to make sure the angles haven't wrapped
  		if ( viewangles[PITCH] - oldAngles[PITCH] > 90 ) {
  			viewangles[PITCH] = oldAngles[PITCH] + 90;
-@@ -1322,6 +1556,10 @@
+@@ -1399,6 +1633,10 @@
  	} else {
  		mouseDx = 0;
  		mouseDy = 0;
@@ -294,10 +294,10 @@
 +		TouchLook( false );
 +		TouchMove( false );
 +#endif
- 	}
- 
- 	for ( i = 0; i < 3; i++ ) {
-@@ -1943,7 +2181,61 @@
+ #ifdef __ANDROID__
+ 		touchMotion.Block();
+ #endif
+@@ -2274,7 +2512,61 @@
  	cmd.impulse = impulse;
  	cmd.flags = flags;
  }

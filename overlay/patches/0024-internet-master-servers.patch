@@ -30,7 +30,7 @@
  
  idAsyncServer		idAsyncNetwork::server;
  idAsyncClient		idAsyncNetwork::client;
-@@ -78,7 +101,7 @@
+@@ -79,7 +102,7 @@
  idCVar				idAsyncNetwork::clientRemoteConsoleAddress( "net_clientRemoteConsoleAddress", "localhost", CVAR_SYSTEM | CVAR_NOCHEAT, "remote console address" );
  idCVar				idAsyncNetwork::clientRemoteConsolePassword( "net_clientRemoteConsolePassword", "", CVAR_SYSTEM | CVAR_NOCHEAT | CVAR_PRIVATE | CVAR_CASE_SENSITIVE, "private remote console password" );
  idCVar				idAsyncNetwork::clientUseLegacyRcon( "net_clientUseLegacyRcon", "0", CVAR_SYSTEM | CVAR_BOOL | CVAR_NOCHEAT, "send the insecure legacy plaintext rcon protocol" );
@@ -39,7 +39,7 @@
  idCVar				idAsyncNetwork::master1( "net_master1", "", CVAR_SYSTEM | CVAR_ARCHIVE, "1st master server address" );
  idCVar				idAsyncNetwork::master2( "net_master2", "", CVAR_SYSTEM | CVAR_ARCHIVE, "2nd master server address" );
  idCVar				idAsyncNetwork::master3( "net_master3", "", CVAR_SYSTEM | CVAR_ARCHIVE, "3rd master server address" );
-@@ -164,6 +187,20 @@
+@@ -174,6 +197,20 @@
  idAsyncNetwork::Init
  ==================
  */
@@ -60,7 +60,7 @@
  void idAsyncNetwork::Init( void ) {
  
  	realTime = 0;
-@@ -184,6 +221,7 @@
+@@ -194,6 +231,7 @@
  	cmdSystem->AddCommand( "serverInfo", GetServerInfo_f, CMD_FL_SYSTEM, "shows server info" );
  	cmdSystem->AddCommand( "LANScan", GetLANServers_f, CMD_FL_SYSTEM, "scans LAN for servers" );
  	cmdSystem->AddCommand( "listServers", ListServers_f, CMD_FL_SYSTEM, "lists scanned servers" );
@@ -70,7 +70,7 @@
  	cmdSystem->AddCommand( "kick", Kick_f, CMD_FL_SYSTEM, "kick a client by connection number" );
 --- a/src/framework/async/AsyncClient.cpp
 +++ b/src/framework/async/AsyncClient.cpp
-@@ -578,6 +578,31 @@
+@@ -793,6 +793,31 @@
  idAsyncClient::GetNETServers
  ==================
  */
@@ -102,9 +102,9 @@
  void idAsyncClient::GetNETServers( void ) {
  	idBitMsg	msg;
  	byte		msgBuf[MAX_MESSAGE_SIZE];
-@@ -604,8 +629,17 @@
- 	const int masterGameTypeFilter = ( localGameTypeFilter >= 0 && localGameTypeFilter <= 3 ) ? localGameTypeFilter : 0;
- 	msg.WriteBits( masterGameTypeFilter, 2 );
+@@ -818,8 +843,17 @@
+ 	msg.WriteBits( 0, 2 );
+ 	msg.WriteBits( 0, 2 );
  
 -	netadr_t adr;
 -	if ( idAsyncNetwork::GetMasterAddress( 0, adr ) ) {
@@ -122,9 +122,9 @@
  		clientPort.SendPacket( adr, msg.GetData(), msg.GetSize() );
  
  		// Ask for the address-family tagged list as well. A master that does
-@@ -623,7 +657,13 @@
- 		extMsg.WriteBits( cvarSystem->GetCVarInteger( "gui_filter_players" ), 2 );
- 		extMsg.WriteBits( masterGameTypeFilter, 2 );
+@@ -837,7 +871,13 @@
+ 		extMsg.WriteBits( 0, 2 );
+ 		extMsg.WriteBits( 0, 2 );
  		clientPort.SendPacket( adr, extMsg.GetData(), extMsg.GetSize() );
 +		common->Printf( "getServers: sent to master%d %s\n", i, Sys_NetAdrToString( adr ) );
 +		sent++;
@@ -136,7 +136,7 @@
  }
  
  /*
-@@ -637,6 +677,10 @@
+@@ -851,6 +891,10 @@
  	for ( i = 0; i < serverList.Num(); i++ ) {
  		common->Printf( "%3d: %s %dms (%s)\n", i, serverList[i].serverInfo.GetString( "si_name" ), serverList[ i ].ping, Sys_NetAdrToString( serverList[i].adr ) );
  	}
@@ -147,9 +147,9 @@
  }
  
  /*
-@@ -1855,7 +1899,13 @@
- 	serverInfo.challenge = msg.ReadLong();			// challenge
- 	protocol = msg.ReadLong();
+@@ -2236,7 +2280,13 @@
+ 		return;
+ 	}
  	if ( protocol != ASYNC_PROTOCOL_VERSION ) {
 -		common->Printf( "server %s ignored - protocol %d.%d, expected %d.%d\n", Sys_NetAdrToString( serverInfo.adr ), protocol >> 16, protocol & 0xffff, ASYNC_PROTOCOL_MAJOR, ASYNC_PROTOCOL_MINOR );
 +		// openQ4-ios overlay: count them as well as printing them. The public
@@ -162,7 +162,7 @@
  		return;
  	}
  	msg.ReadDeltaDict( serverInfo.serverInfo, NULL );
-@@ -1954,15 +2004,18 @@
+@@ -2374,15 +2424,18 @@
  ==================
  */
  void idAsyncClient::ProcessServersListMessage( const netadr_t from, const idBitMsg &msg ) {
@@ -182,7 +182,7 @@
  	if ( msg.GetRemaingData() != 0 ) {
  		common->DPrintf( "received a malformed server list from %s - trailing address data ignored\n", Sys_NetAdrToString( from ) );
  	}
-@@ -1982,12 +2035,13 @@
+@@ -2402,12 +2455,13 @@
  ==================
  */
  void idAsyncClient::ProcessServersListExtMessage( const netadr_t from, const idBitMsg &msg ) {
@@ -197,7 +197,7 @@
  	while ( msg.GetRemaingData() > 0 ) {
  		const int separator = msg.ReadByte();
  		int addressBytes;
-@@ -2037,11 +2091,13 @@
+@@ -2457,11 +2511,13 @@
  		}
  
  		serverList.AddServer( serverList.Num(), Sys_NetAdrToString( server ) );
@@ -211,7 +211,7 @@
  }
  
  /*
-@@ -2249,7 +2305,7 @@
+@@ -2682,7 +2738,7 @@
  	}
  
  	// from master server:

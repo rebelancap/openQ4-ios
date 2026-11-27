@@ -1,6 +1,16 @@
 --- a/src/framework/FileSystem.cpp
 +++ b/src/framework/FileSystem.cpp
-@@ -1639,7 +1639,65 @@
+@@ -1614,6 +1614,9 @@
+ 	int						readCountPacifierBytes;
+ 	std::mutex				readCountMutex;
+ 	std::thread::id			fileSystemMainThread;
++#if defined( __APPLE__ ) && TARGET_OS_IPHONE
++	friend void FileSystem_iOS_AdoptMainThread( void );	// openQ4-ios D-118
++#endif
+ 	int						loadCount;			// total files read
+ 	int						loadStack;			// total files in memory
+ 	idStr					gameFolder;			// this will be a single name without separators
+@@ -1679,7 +1682,65 @@
  private:
  	void					ReplaceSeparators( idStr &path, char sep = PATHSEPERATOR_CHAR );
  	bool					FindCaseInsensitiveOSPathEntry( const char *directory, const char *segment, bool directoryOnly, idStr &resolvedSegment );
@@ -66,7 +76,7 @@
  	int						HashFileName( const char *fname ) const;
  	int						ListOSFiles( const char *directory, const char *extension, idStrList &list );
  	FILE *					OpenOSFile( const char *name, const char *mode, idStr *caseSensitiveName = NULL );
-@@ -2145,6 +2203,13 @@
+@@ -2235,6 +2296,13 @@
  ================
  */
  FILE *idFileSystemLocal::OpenOSFile( const char *fileName, const char *mode, idStr *caseSensitiveName ) {
@@ -80,7 +90,7 @@
  	int i;
  	FILE *fp;
  	idStr fpath, entry;
-@@ -2185,6 +2250,34 @@
+@@ -2275,6 +2343,34 @@
  		if ( ResolveCaseInsensitiveOSPath( fpath.c_str(), resolvedPath, false ) ) {
  			fpath = resolvedPath;
  		}
@@ -115,7 +125,7 @@
  		if ( ListOSFiles( fpath, NULL, list ) == -1 ) {
  			return NULL;
  		}
-@@ -2275,6 +2368,8 @@
+@@ -2365,6 +2461,8 @@
  		}
  	}
  
@@ -124,7 +134,7 @@
  	// a directory remembered as missing may exist now
  	if ( looseDirectoryCacheActive ) {
  		std::lock_guard<std::mutex> lock( looseDirectoryLock );
-@@ -2382,10 +2477,100 @@
+@@ -2472,10 +2570,100 @@
  idFileSystemLocal::FindCaseInsensitiveOSPathEntry
  ===================
  */
@@ -227,7 +237,7 @@
  
  	if ( !listDirectory || !listDirectory[0] ) {
  		listDirectory = ".";
-@@ -2395,106 +2580,248 @@
+@@ -2485,106 +2673,248 @@
  		return false;
  	}
  
@@ -538,20 +548,31 @@
  		if ( resolvedSegment.Cmp( segment.c_str() ) != 0 ) {
  			changed = true;
  		}
-@@ -6208,6 +6535,10 @@
+@@ -6581,6 +6911,10 @@
+ 	int				addon_index;
  
  	common->Printf( "------ Initializing File System ------\n" );
- 
++
 +	// directories may have been created outside the engine since the last
 +	// startup (a Files drop, onboarding import); start the resolver clean
 +	ClearResolvedOSDirectories();
-+
+ 
  	if ( restartChecksums.Num() ) {
  		common->Printf( "restarting in pure mode with %d pak files\n", restartChecksums.Num() );
+@@ -9396,3 +9730,10 @@
+ 		}
  	}
+ }
++
++#if defined( __APPLE__ ) && TARGET_OS_IPHONE
++// openQ4-ios (D-118, Common.cpp OpenQ4_iOS_AdoptEngineThreadIdentity).
++void FileSystem_iOS_AdoptMainThread( void ) {
++	fileSystemLocal.fileSystemMainThread = std::this_thread::get_id();
++}
++#endif
 --- a/src/framework/FileSystem.h
 +++ b/src/framework/FileSystem.h
-@@ -333,6 +333,13 @@
+@@ -420,6 +420,13 @@
  							// in some cases you may need to use this directly
  	virtual void			ClearDirCache( void ) = 0;
  

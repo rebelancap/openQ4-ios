@@ -1,0 +1,29 @@
+--- a/src/ui/RetainedHud.cpp
++++ b/src/ui/RetainedHud.cpp
+@@ -15,6 +15,14 @@
+ #if defined(__ANDROID__)
+ #include "../sys/android/android_public.h"
+ #endif
++#if defined(__APPLE__)
++#include <TargetConditionals.h>
++#if TARGET_OS_IPHONE
++// openQ4-ios (D-123): the shell's top-corner chrome (pause, objectives, gear),
++// in window points; the iOS twin of AndroidTouchControls_HudTop.
++extern "C" float OpenQ4_iOS_TouchHudTop(void);
++#endif
++#endif
+ #include "retained/Runtime.h"
+ #include <json/json.h>
+ #include <cmath>
+@@ -633,6 +641,11 @@
+ 	// In portrait the bottom readouts rise above the thumb deck (section 13.6).
+ 	const float deckEdge=AndroidTouchControls_HudBottomEdge()*viewport.pixelDensityY;
+ 	if (deckEdge>0) bottom=Max(bottom,Max(0.f,viewport.originY+float(viewport.height)-deckEdge)/ratio);
++#elif defined(__APPLE__) && TARGET_OS_IPHONE
++	// openQ4-ios (D-123): the same rule for the iOS shell's chrome buttons,
++	// which sit in the top corners over the scoreboard and the kill feed.
++	const float touchTop=OpenQ4_iOS_TouchHudTop()*viewport.pixelDensityY;
++	top=Max(top,Max(0.f,touchTop-viewport.originY)/ratio);
+ #endif
+ 	impl->gui->SetStateFloat("hud.width",layout.width);
+ 	impl->gui->SetStateFloat("hud.height",layout.height);

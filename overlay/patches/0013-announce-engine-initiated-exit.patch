@@ -1,6 +1,6 @@
 --- a/src/sys/posix/posix_main.cpp
 +++ b/src/sys/posix/posix_main.cpp
-@@ -150,8 +150,21 @@
+@@ -154,8 +154,21 @@
  Posix_Exit
  ================
  */
@@ -23,7 +23,7 @@
  	// nothing below is guaranteed to print again, so do not let an
  	// unterminated line leave with the process
  	Sys_AndroidLogFlush();
-@@ -1595,6 +1608,25 @@
+@@ -1683,6 +1696,25 @@
  */
  void Sys_GenerateEvents( void ) {
  	char *s;

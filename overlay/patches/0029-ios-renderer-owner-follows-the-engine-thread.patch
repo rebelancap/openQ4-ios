@@ -1,6 +1,6 @@
 --- a/src/renderer/RendererResourceSettings.cpp
 +++ b/src/renderer/RendererResourceSettings.cpp
-@@ -547,6 +547,25 @@
+@@ -553,6 +553,25 @@
      }
      return true;
  }

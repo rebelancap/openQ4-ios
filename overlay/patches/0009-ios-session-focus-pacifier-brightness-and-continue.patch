@@ -10,8 +10,8 @@
  #include "NativeInputDispatch.h"
  #include "Session_local.h"
  #include "NativeInputPublications.h"
-@@ -77,6 +80,153 @@
- idCVar	com_showLevelLoadTimes( "com_showLevelLoadTimes", "1", CVAR_SYSTEM | CVAR_BOOL, "print detailed phase timings for level loads" );
+@@ -111,6 +114,153 @@
+ 	"write a level's start autosave on the checkpoint storage worker and finish it on a later frame, so the hand-off from the loading screen does not wait for the disk" );
  idCVar	com_skipLogoVideos( "com_skipLogoVideos", "1", CVAR_SYSTEM | CVAR_ARCHIVE | CVAR_BOOL, "skip startup logo videos and go straight to the main menu" );
  idCVar	com_showLevelshotBounds( "com_showLevelshotBounds", "0", CVAR_SYSTEM | CVAR_ARCHIVE | CVAR_BOOL, "draw a centered 4:3 frame guide for levelshot composition" );
 +#if defined( __APPLE__ ) && TARGET_OS_IPHONE
@@ -164,38 +164,55 @@
  idCVar	s_muteUnfocused( "s_muteUnfocused", "1", CVAR_ARCHIVE | CVAR_BOOL, "mute all audio when the application is out of focus" );
  
  #if defined( USE_SDL3 )
-@@ -809,7 +959,17 @@
+@@ -920,6 +1070,13 @@
+ 	checksum = static_cast<unsigned int>( crc );
  	return true;
  }
- 
++
 +#if defined( __APPLE__ ) && TARGET_OS_IPHONE
 +// D-116: the stamped payload version of the save Session_ValidateSaveGamePayload
-+// last read (0 for an unstamped or rejected one).
++// last read (0 for an unstamped or rejected one); the D-114 rescue box words
++// itself by it when a restore fails.
 +static int session_iosValidatedPayloadVersion = 0;
-+void UI_SetSaveGameRestorePayloadVersion( int payloadVersion );
 +#endif
-+
- static bool Session_ValidateSaveGamePayload( idFile *file, const idStr &savePath, bool allowLegacyPayload ) {
+ 
+ // layoutBuild, when given, receives the build the payload's layout is read as.
+ // A joined checkpoint worker supplies this only for the immutable memory view
+@@ -945,6 +1102,9 @@
+ 		payloadOut->layoutBuild = BUILD_NUMBER;
+ 		payloadOut->otherPlatform = false;
+ 	}
 +#if defined( __APPLE__ ) && TARGET_OS_IPHONE
 +	session_iosValidatedPayloadVersion = 0;
 +#endif
  	int fileLength = -1;
  	if ( !Session_GetBoundedSaveGameLength( file, savePath, "payload preflight", fileLength ) ) {
  		return false;
-@@ -869,6 +1029,12 @@
+@@ -1004,12 +1164,23 @@
  			SESSION_OPENQ4_SAVEGAME_COMPATIBILITY_VERSION );
  		valid = false;
  	}
 +#if defined( __APPLE__ ) && TARGET_OS_IPHONE
-+	// openQ4-ios D-116: LoadGame hands this to the GUI restore, which reads the
-+	// HUD blobs of a v3 payload through the GUI files that wrote them
-+	// (UI_SetSaveGameRestorePayloadVersion, UserInterface.cpp).
++	// openQ4-ios D-116: the D-114 rescue after a failed restore names the format.
 +	session_iosValidatedPayloadVersion = valid ? payloadVersion : 0;
 +#endif
- 	if ( valid && payloadVersion >= SESSION_OPENQ4_SAVEGAME_PREVIOUS_COMPATIBILITY_VERSION ) {
+ 	if ( valid && payloadVersion >= SESSION_OPENQ4_SAVEGAME_TYPED_COMPATIBILITY_VERSION ) {
  		valid = Session_ReadSaveGameString( file, payloadWireABI, SESSION_OPENQ4_SAVEGAME_ABI_STAMP_MAX_BYTES,
  			"payload wire ABI", savePath.c_str() );
-@@ -1082,12 +1248,23 @@
+ 	} else if ( valid ) {
+ 		// Version 2 predates the stamp; it is the layout v2 shipped.
++#if defined( __APPLE__ ) && TARGET_OS_IPHONE
++		// openQ4-ios D-119: except the port's own v2 saves, which are this
++		// build's native raw layout (SaveGameReleases.h).
++		payloadWireABI = OpenQ4_SaveGameV2WireABI( payloadBuild, payloadSourceStamp.c_str(), payloadSourceFileCount,
++			Session_GetSaveGameWireABI() );
++#else
+ 		payloadWireABI = OPENQ4_SAVEGAME_V2_WIRE_ABI;
++#endif
+ 	}
+ 	if ( valid && ( payloadSourceStamp.IsEmpty() || payloadSourceFileCount < 0 ) ) {
+ 		common->Warning( "Savegame '%s' has invalid payload source file count %d",
+@@ -1243,6 +1414,10 @@
  static void Session_RemoveRelativeSaveFile( const idStr &relativePath ) {
  	idStr osPath = fileSystem->RelativePathToOSPath( relativePath.c_str(), "fs_savepath" );
  	fileSystem->RemoveExplicitFile( osPath.c_str() );
@@ -205,22 +222,24 @@
 +	fileSystem->InvalidateCachedOSPath( osPath.c_str() );
  }
  
- static bool Session_RenameRelativeSaveFile( const idStr &from, const idStr &to ) {
+ static void Session_WarnSaveDurabilityUnconfirmed( const std::string &reason ) {
+@@ -1257,7 +1432,14 @@
  	idStr fromOSPath = fileSystem->RelativePathToOSPath( from.c_str(), "fs_savepath" );
  	idStr toOSPath = fileSystem->RelativePathToOSPath( to.c_str(), "fs_savepath" );
--	return rename( fromOSPath.c_str(), toOSPath.c_str() ) == 0;
-+	const bool renamed = rename( fromOSPath.c_str(), toOSPath.c_str() ) == 0;
-+	// A raw rename() is invisible to the filesystem layer, so both directories
-+	// keep serving a listing taken before the save existed. Checking whether the
-+	// destination exists — which the commit does immediately before this — is
-+	// what populates that stale entry in the first place.
+ 	std::string unconfirmed, error;
+-	if ( !Session_MoveSaveFileDurably( fromOSPath.c_str(), toOSPath.c_str(), unconfirmed, error ) ) {
++	const bool moved = Session_MoveSaveFileDurably( fromOSPath.c_str(), toOSPath.c_str(), unconfirmed, error );
++	// A move behind the filesystem layer's back is invisible to it, so both
++	// directories keep serving a listing taken before the save existed.
++	// Checking whether the destination exists — which the commit does
++	// immediately before this — is what populates that stale entry (0009).
 +	fileSystem->InvalidateCachedOSPath( fromOSPath.c_str() );
 +	fileSystem->InvalidateCachedOSPath( toOSPath.c_str() );
-+	return renamed;
- }
- 
- static bool Session_AppendSaveGameIntegrityTrailer( const idStr &relativePath ) {
-@@ -2712,10 +2889,27 @@
++	if ( !moved ) {
+ 		common->DPrintf( "Save rename '%s' -> '%s' failed: %s\n", from.c_str(), to.c_str(), error.c_str() );
+ 		return false;
+ 	}
+@@ -3108,10 +3290,27 @@
  }
  
  static bool Session_ShouldSilenceAudioWhenUnfocused() {
@@ -248,7 +267,7 @@
  #if defined( USE_SDL3 )
  	return s_muteUnfocused.GetBool() && !Sys_SDL_IsGameWindowFocused();
  #elif defined( _WIN32 )
-@@ -5304,6 +5498,11 @@
+@@ -6178,6 +6377,11 @@
  idSessionLocal::StartNewGame
  ===============
  */
@@ -260,7 +279,7 @@
  void idSessionLocal::StartNewGame( const char *mapName, bool devmap, const char *entityFilter ) {
  #ifdef	ID_DEDICATED
  	common->Printf( "Dedicated servers cannot start singleplayer games.\n" );
-@@ -5347,6 +5546,11 @@
+@@ -6221,6 +6425,11 @@
  	// clear the userInfo so the player starts out with the defaults
  	mapSpawnData.userInfo[0].Clear();
  	mapSpawnData.persistentPlayerInfo[0].Clear();
@@ -272,7 +291,7 @@
  	mapSpawnData.userInfo[0] = *cvarSystem->MoveCVarsToDict( CVAR_USERINFO );
  
  	mapSpawnData.serverInfo.Clear();
-@@ -7154,11 +7358,504 @@
+@@ -8504,14 +8713,513 @@
  static const char *Session_CommandSaveGameName( const idCmdArgs &args ) {
  	return ( Session_CommandSaveGameType( args ) == ST_REGULAR ) ? args.Argv(1) : NULL;
  }
@@ -302,11 +321,11 @@
 +#else
  	sessLocal.LoadGame( Session_CommandLoadGameName( args ) );
 +#endif
-+}
-+
+ }
+ 
 +#if defined( __APPLE__ ) && TARGET_OS_IPHONE
-+/*
-+===============
+ /*
+ ===============
 +Session_LoadNewestGame_f
 +
 +openQ4-ios: the openq4://continue route and the Continue App Intent. Tries the
@@ -448,21 +467,27 @@
 +			|| !Session_ReadSaveGameString( file, payloadStamp, SESSION_OPENQ4_SAVEGAME_SOURCE_STAMP_MAX_BYTES, "payload source stamp", path.c_str() )
 +			|| !Session_ReadSaveGameInt( file, payloadFileCount, "payload source file count", path.c_str() ) ) {
 +		verdict = 4;
-+	} else if ( payloadVersion < SESSION_OPENQ4_SAVEGAME_PREVIOUS_COMPATIBILITY_VERSION ) {
-+		// D-116: v0.14 writes payload v4 and restores v3 too (every save made
-+		// by openQ4-ios 1.0.0) — the same two-version window
-+		// Session_ValidateSaveGamePayload accepts. A v3 save's HUD blobs are
-+		// read through the 1.0.0-era HUD files (UserInterface.cpp legacy GUI
-+		// shapes), which is what makes "restores v3" true for SP saves.
++	} else if ( payloadVersion < SESSION_OPENQ4_SAVEGAME_TYPED_COMPATIBILITY_VERSION
++			&& !OpenQ4_IsSaveGameIosV2Stamp( payloadVersion, payloadBuild, payloadStamp.c_str(), payloadFileCount ) ) {
++		// v2 and older: upstream reads v2 only on the Windows ABI that wrote
++		// it — except the port's own pre-1.0.0 v2 saves (D-119), which carry
++		// no ABI string and are this build's native layout.
 +		verdict = 1;
-+	} else if ( payloadVersion != SESSION_OPENQ4_SAVEGAME_COMPATIBILITY_VERSION
-+			&& payloadVersion != SESSION_OPENQ4_SAVEGAME_PREVIOUS_COMPATIBILITY_VERSION ) {
++	} else if ( payloadVersion > SESSION_OPENQ4_SAVEGAME_COMPATIBILITY_VERSION ) {
 +		verdict = 4;
-+	} else if ( !Session_ReadSaveGameString( file, payloadABI, SESSION_OPENQ4_SAVEGAME_ABI_STAMP_MAX_BYTES, "payload wire ABI", path.c_str() ) ) {
++	} else if ( payloadVersion >= SESSION_OPENQ4_SAVEGAME_TYPED_COMPATIBILITY_VERSION
++			&& !Session_ReadSaveGameString( file, payloadABI, SESSION_OPENQ4_SAVEGAME_ABI_STAMP_MAX_BYTES, "payload wire ABI", path.c_str() ) ) {
 +		verdict = 4;
-+	} else if ( payloadABI.Icmp( Session_GetSaveGameWireABI() ) != 0 ) {
++	} else if ( payloadVersion >= SESSION_OPENQ4_SAVEGAME_TYPED_COMPATIBILITY_VERSION && payloadABI.Icmp( payloadVersion >= OPENQ4_SAVEGAME_PORTABLE_VERSION
++			? OpenQ4_SaveGamePortableWireABI( Session_GetSaveGameWireABI() ) : Session_GetSaveGameWireABI() ) != 0 ) {
++		// D-118: v0.14.1 restores v3 (openQ4-ios 1.0.0), v4 (1.0.0.1/1.1.0)
++		// and v5 (portable) payloads, the same window and ABI rule
++		// Session_ValidateSaveGamePayload applies.
 +		verdict = 2;
-+	} else if ( payloadBuild < SESSION_OPENQ4_SAVEGAME_MINIMUM_SUPPORTED_BUILD ) {
++	} else if ( OpenQ4_SaveGameLayoutBuild( payloadVersion, payloadBuild, payloadStamp.c_str(), payloadFileCount )
++			< ( payloadVersion == OPENQ4_SAVEGAME_V2_VERSION ? OPENQ4_SAVEGAME_V2_FIRST_RELEASE_BUILD
++				: SESSION_OPENQ4_SAVEGAME_MINIMUM_SUPPORTED_BUILD ) ) {
++		// The same floors Session_ValidateSaveGamePayload applies.
 +		verdict = 1;
 +	} else if ( !Session_SaveGameMapExists( normalizedMap, normalizedFilter ) ) {
 +		verdict = 3;
@@ -772,14 +797,17 @@
 +	session_iosStartPlayerInfo = &playerInfo;
 +	sessLocal.StartNewGame( map.c_str(), false, filter.c_str() );
 +	session_iosStartPlayerInfo = NULL;
- }
++}
 +#endif
- 
- /*
++
++/*
++===============
+ SaveGame_f
  ===============
-@@ -7763,6 +8460,9 @@
- 		// ExecuteMapChange tears down the currently running map.
- 		headerValid = Session_ValidateSaveGamePayload( loadGameFile, in, true );
+ */
+@@ -9713,6 +10421,9 @@
+ 			loadGameFailure = LOADGAME_FAILURE_PLATFORM;
+ 		}
  	}
 +#if defined( __APPLE__ ) && TARGET_OS_IPHONE
 +	const int payloadVersionForRestore = headerValid ? session_iosValidatedPayloadVersion : 0;
@@ -787,35 +815,23 @@
  	if ( headerValid && saveMap.IsEmpty() ) {
  		common->Warning( "Savegame '%s' has an empty map name", in.c_str() );
  		headerValid = false;
-@@ -7811,7 +8511,23 @@
- 		// make sure no buttons are pressed
+@@ -9780,6 +10491,12 @@
  		mapSpawnData.mapSpawnUsercmd[0].buttons = 0;
  
+ 		if ( !ExecuteSaveGameMapChange( requestedSaveName.c_str() ) ) {
 +#if defined( __APPLE__ ) && TARGET_OS_IPHONE
-+		// D-116: the GUI restore needs the payload version (older HUD shapes),
-+		// and a restore that fails part way (a common->Error thrown out of the
-+		// game's restore, after Stop() has already torn the level down) ends in
-+		// the D-114 rescue box rather than a bare main menu.
-+		UI_SetSaveGameRestorePayloadVersion( payloadVersionForRestore );
-+		try {
-+			ExecuteMapChange();
-+		} catch ( idException & ) {
-+			UI_SetSaveGameRestorePayloadVersion( 0 );
++			// D-114/D-116: a restore that fails part way (upstream has already
++			// stopped the session and shown its own notice) also offers the
++			// restart-with-inventory rescue box.
 +			Session_iOS_OfferRescueAfterFailedRestore( requestedSaveName.c_str(), payloadVersionForRestore );
-+			throw;
-+		}
-+		UI_SetSaveGameRestorePayloadVersion( 0 );
-+#else
- 		ExecuteMapChange();
 +#endif
+ 			return false;
+ 		}
  
- 		SetGUI( NULL, NULL );
- 	}
-@@ -8271,6 +8987,54 @@
- 		explicit PacifierScope( bool &flag ) : active( flag ) { active = true; }
+@@ -10311,6 +11028,54 @@
  		~PacifierScope() { active = false; }
  	} scope( insidePacifierUpdate );
-+
+ 
 +#if defined( __APPLE__ ) && TARGET_OS_IPHONE
 +	// This — not Printf — is the engine's own "I am inside a blocking load"
 +	// callback. It fires from every file read (idFileSystemLocal::AddToReadCount)
@@ -863,10 +879,11 @@
 +	OpenQ4_iOS_LoadProgress();
 +	return;
 +#endif
- 
++
  #ifdef ID_DEDICATED
  	// Dedicated map loads have no client presentation path, but the server
-@@ -8636,6 +9400,39 @@
+ 	// pacifier must still run often enough to keep connected clients alive.
+@@ -10700,6 +11465,39 @@
  
  	renderSystem->SetLoadingScreenSwapIntervalBypass( insideExecuteMapChange );
  
@@ -904,27 +921,26 @@
 +#endif
 +
  	UI_SettingsRenderFrame settingsFrame;
+ 	const double presentStart = LoadingPresentation_Now();
  	// a running VR session paces this update on the headset and hands the
- 	// renderer this frame's swapchain images
-@@ -8645,6 +9442,13 @@
- 	// draw everything
+@@ -10711,6 +11509,13 @@
  	Draw();
  	vrSystem->DrawMenuPointer();
-+
+ 
 +#if defined( __APPLE__ ) && TARGET_OS_IPHONE
 +	// After Draw(), before EndFrame(): the last 2D geometry of the frame, so it
 +	// covers the world, the HUD, the menus and the console alike. Inside Draw()
 +	// would miss the paths that return early from it.
 +	Session_iOSApplyBrightness();
 +#endif
- 
++
  	settingsFrame.Submitting();
  	if ( com_speeds.GetBool() ) {
-@@ -8655,6 +9459,14 @@
- 	settingsFrame.Presented();
- 	RetainedUI_FrameSubmitted();
+ 		renderSystem->EndFrame( &time_frontend, &time_backend );
+@@ -10722,6 +11527,14 @@
+ 	LoadingPresentation_Presented( presentStart, LoadingPresentation_Now() );
  	vrSystem->EndFrame();
-+
+ 
 +#if defined( OPENQ4_VISIONOS_3D )
 +	}
 +	// Back to mono for anything that renders outside this function (screenshot
@@ -932,17 +948,39 @@
 +	// carry half a pair's worth of eye offset.
 +	R_Stereo_SetEye( 0 );
 +#endif
- 
++
  	insideUpdateScreen = false;
  }
-@@ -9167,6 +9979,10 @@
- 	cmdSystem->AddCommand( "openq4_browser", Session_OpenQ4Browser_f, CMD_FL_SYSTEM | CMD_FL_CHEAT, "reports and exercises main-menu server-browser operations for engine-scripted validation" );
+ 
+@@ -11188,7 +12001,19 @@
+ 	};
+ 
+ 	for ( int i = 0; i < (int)( sizeof( menuGameCVars ) / sizeof( menuGameCVars[0] ) ); i++ ) {
+-		if ( cvarSystem->Find( menuGameCVars[i].name ) != NULL ) {
++		if ( const idCVar *existing = cvarSystem->Find( menuGameCVars[i].name ) ) {
++			// openQ4-ios (D-123): a config that a multiplayer session archived
++			// (`seta g_spectatorFollowView "0"`) creates the cvar before this,
++			// with no type flag. The retained pages read typed sources only, so
++			// Player Setup refused to open ("Unavailable CVar source
++			// 'g_spectatorFollowView' at event entry") on every install that had
++			// played multiplayer. Give it its kind, keeping the stored value.
++			const int typeFlags = CVAR_BOOL | CVAR_INTEGER | CVAR_FLOAT;
++			if ( ( menuGameCVars[i].flags & typeFlags ) != 0 && ( existing->GetFlags() & typeFlags ) == 0 ) {
++				const idStr stored = existing->GetString();
++				cvarSystem->SetCVarString( menuGameCVars[i].name, stored.c_str(),
++					CVAR_GAME | CVAR_ARCHIVE | menuGameCVars[i].flags );
++			}
+ 			continue;
+ 		}
+ 		cvarSystem->SetCVarString( menuGameCVars[i].name, menuGameCVars[i].value,
+@@ -11276,6 +12101,10 @@
  	cmdSystem->AddCommand( "saveGame", SaveGame_f, CMD_FL_SYSTEM|CMD_FL_CHEAT, "saves a game" );
+ 	cmdSystem->AddCommand( "testAutoSave", TestAutoSave_f, CMD_FL_SYSTEM|CMD_FL_CHEAT, "writes a named autosave for developer lifecycle validation" );
  	cmdSystem->AddCommand( "loadGame", LoadGame_f, CMD_FL_SYSTEM|CMD_FL_CHEAT, "loads a game", idCmdSystem::ArgCompletion_SaveGame );
 +#if defined( __APPLE__ ) && TARGET_OS_IPHONE
 +	cmdSystem->AddCommand( "loadNewestGame", Session_LoadNewestGame_f, CMD_FL_SYSTEM|CMD_FL_CHEAT, "loads the newest savegame this build can load (openq4://continue)" );
 +	cmdSystem->AddCommand( "restartLevelFromSave", Session_RestartLevelFromSave_f, CMD_FL_SYSTEM|CMD_FL_CHEAT, "starts the level of the last refused older-format save from its beginning, with its saved inventory" );
 +#endif
+ 	cmdSystem->AddCommand( "resumeAfterRendererRestart", Session_ResumeAfterRendererRestart_f, CMD_FL_SYSTEM|CMD_FL_CHEAT, "loads the game that a renderer restart saved" );
  #endif
  
- 	cmdSystem->AddCommand( "takeViewNotes", TakeViewNotes_f, CMD_FL_SYSTEM, "take notes about the current map from the current view" );

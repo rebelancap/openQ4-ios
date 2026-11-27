@@ -1,0 +1,65 @@
+--- a/src/ui/retained/Runtime.cpp
++++ b/src/ui/retained/Runtime.cpp
+@@ -1533,7 +1533,11 @@
+ class System final : public Rml::SystemInterface {
+ public:
+ 	explicit System(Host& h) : host(h) {}
++#if defined( __APPLE__ ) && TARGET_OS_IPHONE
++    std::thread::id thread=std::this_thread::get_id();	// openQ4-ios: re-bound by Runtime::iOS_AdoptCanvasThread
++#else
+     const std::thread::id thread=std::this_thread::get_id();
++#endif
+     bool* preparationFailure=nullptr;
+     void PreparationFault() noexcept {
+         if(preparationFailure && thread==std::this_thread::get_id())*preparationFailure=true;
+@@ -1913,7 +1917,11 @@
+ 
+ struct Runtime::Canvas {
+     RuntimeCanvasIdentity identity;
++#if defined( __APPLE__ ) && TARGET_OS_IPHONE
++    std::thread::id thread=std::this_thread::get_id();	// openQ4-ios: re-bound by Runtime::iOS_AdoptCanvasThread
++#else
+     const std::thread::id thread=std::this_thread::get_id();
++#endif
+     bool alive=true,preparing=false,retiring=false;
+     std::weak_ptr<PreparedDocument::Data> pending;
+ };
+@@ -3308,6 +3316,12 @@
+ bool Runtime::HasActiveCanvasCallback() const noexcept {
+     return canvas->thread!=std::this_thread::get_id() || canvas->preparing;
+ }
++#if defined( __APPLE__ ) && TARGET_OS_IPHONE
++void Runtime::iOS_AdoptCanvasThread() noexcept {
++    canvas->thread=std::this_thread::get_id();
++    if(impl->services)impl->services->system.thread=canvas->thread;
++}
++#endif
+ void Runtime::RetireCanvasOwner() noexcept {
+     if(canvas->thread!=std::this_thread::get_id())return;
+     canvas->retiring=true;Mutate(true);
+--- a/src/ui/retained/Runtime.h
++++ b/src/ui/retained/Runtime.h
+@@ -13,6 +13,9 @@
+ #include "Interaction.h"
+ #include "DocumentEdit.h"
+ #include "Hud.h"
++#if defined( __APPLE__ )
++#include <TargetConditionals.h>
++#endif
+ 
+ namespace openq4::ui {
+ 
+@@ -275,6 +278,13 @@
+     // Registered view destruction revokes input now; resource cleanup waits
+     // until an active callback has unwound. This flag cannot be reset.
+     void RetireCanvasOwner() noexcept;
++#if defined( __APPLE__ ) && TARGET_OS_IPHONE
++    // openQ4-ios: the shell runs common->Init on the main thread and every
++    // frame on its engine thread. A canvas made during init (the title menu and
++    // its siblings) is bound to main and would refuse every later update; the
++    // engine thread adopts it once, before its first frame (RetainedUI.cpp).
++    void iOS_AdoptCanvasThread() noexcept;
++#endif
+     bool ObserveNumberNativeCandidate(NumberNativeCandidate&) const noexcept;
+     // Source/path are borrowed until any mutating operation, never native authority.
+     bool SourceMatches(const std::string&,const std::string&) const noexcept;

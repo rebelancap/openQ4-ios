@@ -1,6 +1,6 @@
 --- a/src/renderer/RendererModule.cpp
 +++ b/src/renderer/RendererModule.cpp
-@@ -25,7 +25,15 @@
+@@ -27,7 +27,15 @@
  // every build shape, including module-only clients that shed the static
  // renderer sources
  static const char *r_renderApiArgs[] = { "best", "gl", "vulkan", "gl-module", "gles", NULL };
@@ -17,7 +17,7 @@
  // Android has no desktop GL at all; the ES module is the only renderer built.
  #define OPENQ4_DEFAULT_RENDER_API	"gles"
  static const rendererModuleApi_t rm_platformDefaultApi = RENDER_MODULE_API_GLES;
-@@ -45,10 +53,16 @@
+@@ -51,10 +59,16 @@
  idCVar r_windowHeight( "r_windowHeight", "720", CVAR_RENDERER | CVAR_ARCHIVE | CVAR_INTEGER, "windowed mode height" );
  idCVar r_skipGuiShaders( "r_skipGuiShaders", "0", CVAR_RENDERER | CVAR_INTEGER, "1 = skip all gui elements on surfaces, 2 = skip drawing but still handle events, 3 = draw but skip events", 0, 3, idCmdSystem::ArgCompletion_Integer<0,3> );
  
@@ -35,7 +35,7 @@
  idRenderSystem *		renderSystem = NULL;
  idRenderModelManager *	renderModelManager = NULL;
  #endif
-@@ -634,6 +648,13 @@
+@@ -673,6 +687,13 @@
  candidate is now the active renderer path.
  ====================
  */
@@ -49,7 +49,7 @@
  static bool RM_TryLoadModuleApi( rendererModuleApi_t api, rendererModuleStatus_t &status ) {
  #ifndef OPENQ4_RENDERER_MODULE_ONLY
  	if ( api == RENDER_MODULE_API_GL ) {
-@@ -663,6 +684,18 @@
+@@ -702,6 +723,18 @@
  	}
  	idStr::Copynz( status.modulePath, modulePath, sizeof( status.modulePath ) );
  
@@ -68,7 +68,7 @@
  	common->Printf( "Loading renderer module: api='%s' path='%s'\n", R_RendererModule_ApiName( api ), modulePath );
  	intptr_t handle = Sys_DLL_Load( modulePath );
  	if ( handle == 0 ) {
-@@ -680,6 +713,7 @@
+@@ -719,6 +752,7 @@
  		RM_AppendFallbackReason( status, "missing GetRenderAPI entry point" );
  		return false;
  	}
@@ -76,7 +76,7 @@
  
  	renderImport_t moduleImport;
  	RM_BuildImport( moduleImport );
-@@ -755,7 +789,26 @@
+@@ -794,7 +828,26 @@
  
  	const bool retryStartup = rm_state.startupRetryPending;
  	const rendererModuleStatus_t failedStatus = status;
@@ -103,7 +103,7 @@
  	rm_state.everBooted = true;
  
  	if (!RM_UnloadModule()) return;
-@@ -839,6 +892,14 @@
+@@ -883,6 +936,14 @@
  }
  
  bool R_RendererModule_RetryFailedStartup( void ) {

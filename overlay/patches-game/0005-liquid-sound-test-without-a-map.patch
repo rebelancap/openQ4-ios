@@ -1,0 +1,34 @@
+--- a/src/game/PlayerView.cpp
++++ b/src/game/PlayerView.cpp
+@@ -870,6 +870,14 @@
+ ===================
+ */
+ static bool OpenQ4_SoundPointInLiquid( const idVec3 &point ) {
++	// openQ4-ios D-122: the sound world keeps this pointer after the map is gone,
++	// and a render-demo replayed right after a game map (record, disconnect,
++	// playDemo) updated emitters with no clip world: idGameLocal::Contents read
++	// clip[0] of an empty list (SIGSEGV, sim-verified with lldb). No map, no
++	// liquid. Upstreaming candidate.
++	if ( gameLocal.GameState() != GAMESTATE_ACTIVE ) {
++		return false;
++	}
+ 	return gameLocal.LiquidContentsAtPoint( point, NULL ) != 0;
+ }
+ // openQ4 END
+--- a/src/mpgame/PlayerView.cpp
++++ b/src/mpgame/PlayerView.cpp
+@@ -889,6 +889,14 @@
+ ===================
+ */
+ static bool OpenQ4_SoundPointInLiquid( const idVec3 &point ) {
++	// openQ4-ios D-122: the sound world keeps this pointer after the map is gone,
++	// and a render-demo replayed right after a game map (record, disconnect,
++	// playDemo) updated emitters with no clip world: idGameLocal::Contents read
++	// clip[0] of an empty list (SIGSEGV, sim-verified with lldb). No map, no
++	// liquid. Upstreaming candidate.
++	if ( gameLocal.GameState() != GAMESTATE_ACTIVE ) {
++		return false;
++	}
+ 	return gameLocal.LiquidContentsAtPoint( point, NULL ) != 0;
+ }
+ // openQ4 END

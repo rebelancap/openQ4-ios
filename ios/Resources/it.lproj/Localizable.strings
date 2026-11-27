@@ -331,3 +331,11 @@
 "This save is damaged or incomplete and cannot be loaded." = "Questo salvataggio è danneggiato o incompleto e non può essere caricato.";
 /* #str_200245 + MT */
 "This save was made by an older version of openQ4 and cannot be restored." = "Questo salvataggio è stato creato da una versione precedente di openQ4 e non può essere ripristinato.";
+
+/* D-122: the in-game Updates button on iOS/visionOS */
+"openQ4 on iPhone, iPad and Apple Vision Pro is updated through SideStore or the page you installed it from, not from inside the game." = "Su iPhone, iPad e Apple Vision Pro, openQ4 si aggiorna tramite SideStore o la pagina da cui l'hai installato, non dall'interno del gioco.";
+
+/* D-123: reloadEngine refused on iOS/visionOS (Mods > Load, renderer restart) */
+"This change needs openQ4 to start again, which it cannot do by itself on this device. Choose mods with the gear button's Mods page; for other changes, close openQ4 and open it again." = "Questa modifica richiede il riavvio di openQ4, che su questo dispositivo non può farlo da solo. Scegli le mod nella pagina Mod del pulsante a ingranaggio; per le altre modifiche, chiudi openQ4 e riaprilo.";
+"Restart needed" = "Riavvio necessario";
+"New Interface" = "Nuova interfaccia";

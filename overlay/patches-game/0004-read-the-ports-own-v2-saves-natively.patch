@@ -1,0 +1,34 @@
+--- a/src/game/gamesys/SaveGame.cpp
++++ b/src/game/gamesys/SaveGame.cpp
+@@ -3049,7 +3049,14 @@
+ 
+ 	{
+ 		// Version 2 predates the wire-ABI stamp; it is the layout v2 shipped.
++#ifdef OPENQ4_IOS
++		// openQ4-ios D-119: except the port's own v2 saves, which are this
++		// build's native raw layout (SaveGameReleases.h).
++		idStr savedWireABI = OpenQ4_SaveGameV2WireABI( buildNumber, openQ4SaveGameCompatibilityStamp.c_str(),
++			openQ4SaveGameCompatibilitySourceFileCount, OpenQ4SaveGameWireABI() );
++#else
+ 		idStr savedWireABI = OPENQ4_SAVEGAME_V2_WIRE_ABI;
++#endif
+ 		if ( openQ4SaveGameCompatibilityVersion >= OPENQ4_SAVEGAME_TYPED_COMPATIBILITY_VERSION ) {
+ 			ReadString( savedWireABI );
+ 		}
+--- a/src/mpgame/gamesys/SaveGame.cpp
++++ b/src/mpgame/gamesys/SaveGame.cpp
+@@ -3026,7 +3026,14 @@
+ 
+ 	{
+ 		// Version 2 predates the wire-ABI stamp; it is the layout v2 shipped.
++#ifdef OPENQ4_IOS
++		// openQ4-ios D-119: except the port's own v2 saves, which are this
++		// build's native raw layout (SaveGameReleases.h).
++		idStr savedWireABI = OpenQ4_SaveGameV2WireABI( buildNumber, openQ4SaveGameCompatibilityStamp.c_str(),
++			openQ4SaveGameCompatibilitySourceFileCount, OpenQ4SaveGameWireABI() );
++#else
+ 		idStr savedWireABI = OPENQ4_SAVEGAME_V2_WIRE_ABI;
++#endif
+ 		if ( openQ4SaveGameCompatibilityVersion >= OPENQ4_SAVEGAME_TYPED_COMPATIBILITY_VERSION ) {
+ 			ReadString( savedWireABI );
+ 		}

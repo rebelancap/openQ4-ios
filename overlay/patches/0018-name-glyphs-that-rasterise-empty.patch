@@ -1,9 +1,11 @@
 --- a/src/renderer/tr_fontTTF.cpp
 +++ b/src/renderer/tr_fontTTF.cpp
-@@ -783,12 +783,33 @@
- 	int tallest = 0;
- 	int rendered = 0;
- 
+@@ -872,7 +872,41 @@
+ 		widest = Max( widest, paddedWidth );
+ 		tallest = Max( tallest, paddedHeight );
+ 		rendered++;
++	}
++
 +	/*
 +	 * Letters that the face covers but that produced no pixels.
 +	 *
@@ -16,50 +18,27 @@
 +	 * at from a photograph.
 +	 *
 +	 * Printable ASCII only: the upper range is legitimately uncovered by several
-+	 * of the shipped faces and warning about it would bury the signal.
++	 * of the shipped faces and warning about it would bury the signal. Collected
++	 * here, serially, from what the (parallel since v0.15.0) raster pass left in
++	 * each slot: no metrics, or a covered glyph whose rasterisation failed.
 +	 */
 +	char missing[96];
 +	int  numMissing = 0;
-+
- 	for ( int i = 0; i < count; i++ ) {
- 		const int codepoint = (int)codePoints[i];
- 		const int glyphIndex = face.GlyphForCodepoint( codepoint );
-+		const bool printable = ( codepoint > 32 && codepoint < 127 );
- 
- 		ttGlyphMetrics_t metrics;
- 		if ( !face.GetGlyphMetrics( glyphIndex, metrics ) ) {
-+			if ( printable && numMissing < (int)sizeof( missing ) - 1 ) {
-+				missing[ numMissing++ ] = (char)codepoint;
-+			}
- 			continue;
- 		}
- 		rasters[i].advance = metrics.advance;
-@@ -800,9 +821,15 @@
- 			continue;
- 		}
- 		if ( !face.RasterizeGlyph( glyphIndex, scale, rasters[i].bitmap ) ) {
-+			if ( printable && numMissing < (int)sizeof( missing ) - 1 ) {
-+				missing[ numMissing++ ] = (char)codepoint;
-+			}
- 			continue;
- 		}
- 		if ( rasters[i].bitmap.pixels == NULL ) {
-+			if ( printable && numMissing < (int)sizeof( missing ) - 1 ) {
-+				missing[ numMissing++ ] = (char)codepoint;
-+			}
- 			continue;
- 		}
- 
-@@ -814,6 +841,12 @@
- 		rendered++;
++	for ( int i = 0; i < count; i++ ) {
++		const int codepoint = (int)codePoints[i];
++		if ( codepoint <= 32 || codepoint >= 127 ) {
++			continue;
++		}
++		const bool failed = !rasters[i].valid || ( rasters[i].covered && !rasterized[i] );
++		if ( failed && numMissing < (int)sizeof( missing ) - 1 ) {
++			missing[ numMissing++ ] = (char)codepoint;
++		}
  	}
- 
 +	if ( numMissing > 0 ) {
 +		missing[ numMissing ] = '\0';
 +		common->Warning( "TTF font: '%s' %ipt rasterised no pixels for %i printable glyph(s): %s (em %.1f px, upscale %.3f)",
 +						 fontName, pointSize, numMissing, missing, pixelEm, slotUpscale );
 +	}
-+
+ 
  	if ( rendered == 0 ) {
  		for ( int i = 0; i < count; i++ ) {
- 			idTrueTypeFont::FreeGlyphBitmap( rasters[i].bitmap );

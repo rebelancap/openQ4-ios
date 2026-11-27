@@ -205,6 +205,15 @@ mkdir -p "$SIM_CFG_DIR"
 } > "$SIM_CFG_DIR/openQ4Config.cfg"
 echo "==> wrote simulator config ($(wc -l < "$SIM_CFG_DIR/openQ4Config.cfg" | tr -d ' ') lines)"
 
+# Silent by default: the simulator plays through this Mac's speakers, and runs
+# here are unattended. OPENQ4_MUTE=1 makes the shell push 0 for Game and Music
+# Volume instead of the stored settings (openq4_ios_settings.m PushToEngine);
+# it is an environment variable, so it also reaches the visionOS SwiftUI entry,
+# which ignores launch arguments. SIM_MUTE=0 leaves the volumes alone (an
+# audio round). Confirm with the bridge: `s_volume` must read 0.
+SIM_MUTE="${SIM_MUTE:-1}"
+echo "==> OPENQ4_MUTE=$SIM_MUTE"
+
 echo "==> launching"
 # MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS=0 is mandatory on the simulator: Metal
 # argument buffers break every descriptor read there, producing a wholly black
@@ -215,6 +224,7 @@ LAUNCH_LOG="$ARTIFACTS/launch.log"
 SIMCTL_CHILD_MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS=0 \
 SIMCTL_CHILD_SDL_JOYSTICK_MFI=0 \
 SIMCTL_CHILD_OPENQ4_CONSOLE_BRIDGE=1 \
+SIMCTL_CHILD_OPENQ4_MUTE="$SIM_MUTE" \
 	xcrun simctl launch --console-pty "$SIM_UDID" "$BUNDLE_ID" \
 		${ENGINE_ARGS[@]+"${ENGINE_ARGS[@]}"} > "$LAUNCH_LOG" 2>&1 &
 LAUNCH_PID=$!

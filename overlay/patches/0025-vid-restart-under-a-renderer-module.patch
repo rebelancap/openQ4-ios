@@ -1,12 +1,45 @@
 --- a/src/renderer/RenderSystem_init.cpp
 +++ b/src/renderer/RenderSystem_init.cpp
-@@ -5754,6 +5754,42 @@
- 		if ( idStr::Icmp( args.Argv( i ), "windowed" ) == 0 ) {
- 			forceWindow = true;
- 			continue;
-+		}
-+	}
+@@ -267,6 +267,35 @@
+ thread_local glconfig_t glConfig;
+ #else
+ glconfig_t	glConfig;
++#endif
 +
++#if defined( OPENQ4_RENDERER_VK_MODULE ) && defined( OPENQ4_RENDERER_MODULE_STATIC ) && defined( __APPLE__ ) && TARGET_OS_IPHONE
++/*
++ * openQ4-ios (D-118). The Vulkan module's glConfig is thread_local since
++ * v0.14.1 (its render thread works from a copy). The iOS shell initialises the
++ * renderer on the MAIN thread and runs every later frame on its engine thread,
++ * where glConfig would start zeroed: isInitialized false, so EndFrame returns
++ * before issuing a single command and the screen freezes on the last frame
++ * init presented. The main thread snapshots its config once init is done and
++ * the engine thread adopts it before its first frame (beside the renderer
++ * owner hand-off, overlay 0029). Any later renderer restart runs on the engine
++ * thread and writes the engine thread's copy, which is the one frames read.
++ */
++static glconfig_t	r_iosConfigHandoff;
++static bool			r_iosConfigHandoffValid = false;
++
++extern "C" void OpenQ4_iOS_SnapshotRendererConfig( void ) {
++	r_iosConfigHandoff = glConfig;
++	r_iosConfigHandoffValid = true;
++}
++
++extern "C" int OpenQ4_iOS_AdoptRendererConfig( void ) {
++	if ( !r_iosConfigHandoffValid ) {
++		return 0;
++	}
++	glConfig = r_iosConfigHandoff;
++	return 1;
++}
+ #endif
+ 
+ const char *r_rendererArgs[] = { "best", "arb2", "modern", "glesd3", "arb", "Cg", "exp", "nv10", "nv20", "r200", NULL };
+@@ -6230,6 +6259,42 @@
+ 		}
+ 	}
+ 
 +	/*
 +	 * A FULL restart is a GL-only flow, and under a renderer MODULE it is
 +	 * fatal (openQ4-ios D-091).
@@ -40,11 +73,14 @@
 +					"restarting the render device instead\n",
 +					R_RendererModule_ApiName( rmStatus.activeApi ) );
 +			full = false;
- 		}
- 	}
++		}
++	}
++
+ 	R_NormalizeDisplayCvars();
  
-@@ -5791,8 +5827,16 @@
- 		parms.multiSamples = r_multiSamples.GetInteger();
+ 	// this could take a while, so give them the cursor back ASAP
+@@ -6265,8 +6330,16 @@
+ 		parms.multiSamples = r_windowCarriesMultisampling ? r_multiSamples.GetInteger() : 0;
  		parms.stereo = false;
  		if ( !GLimp_SetScreenParms( parms ) ) {
 +			// Same reason as above: for a module renderer the full flow is a

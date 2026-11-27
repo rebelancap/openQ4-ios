@@ -1,0 +1,35 @@
+--- a/src/game/Game_local.cpp
++++ b/src/game/Game_local.cpp
+@@ -1503,9 +1503,32 @@
+ }
+ 
+ void idGameLocal::NotifySaveGameComplete() {
++#ifdef OPENQ4_IOS
++	/*
++	 openQ4-ios D-119: "Game Saved..." drew twice, side by side. Raven always
++	 draws the objective system (PlayerView.cpp, "always draw objective
++	 system"), and idPlayer::SaveMessage fires saveMessage at the HUD AND at it,
++	 so both guis/hud.gui and guis/wristcomm.gui show their own quicksave_msg.
++	 In retail both were the same 640x480 rect and covered each other exactly;
++	 openQ4's hud.gui anchors its copy to the top middle of the wide view (and
++	 the Remastered layout moves and shrinks it), wristcomm.gui does not, so two
++	 copies show a few pixels apart. Reproduced on the v0.14.1 macOS oracle with
++	 ui_retained 0 (upstreaming candidate). One notice: the HUD's while the HUD
++	 is drawn, the objective system's while it is open (the HUD is hidden then).
++	*/
++	idPlayer *player = GetLocalPlayer();
++	if ( player != NULL && player->GetHud() != NULL ) {
++		if ( player->objectiveSystemOpen && player->objectiveSystem != NULL ) {
++			player->objectiveSystem->HandleNamedEvent( "saveMessage" );
++		} else {
++			player->GetHud()->HandleNamedEvent( "saveMessage" );
++		}
++	}
++#else
+ 	if ( GetLocalPlayer() && GetLocalPlayer()->GetHud() ) {
+ 		GetLocalPlayer()->SaveMessage();
+ 	}
++#endif
+ }
+ 
+ /*

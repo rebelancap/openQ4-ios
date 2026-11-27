@@ -184,3 +184,11 @@
 "The level this save needs is not installed." = "The level this save needs is not installed.";
 "This save is damaged or incomplete and cannot be loaded." = "This save is damaged or incomplete and cannot be loaded.";
 "This save was made by an older version of openQ4 and cannot be restored." = "This save was made by an older version of openQ4 and cannot be restored.";
+
+/* D-122: the in-game Updates button on iOS/visionOS */
+"openQ4 on iPhone, iPad and Apple Vision Pro is updated through SideStore or the page you installed it from, not from inside the game." = "openQ4 on iPhone, iPad and Apple Vision Pro is updated through SideStore or the page you installed it from, not from inside the game.";
+
+/* D-123: reloadEngine refused on iOS/visionOS (Mods > Load, renderer restart) */
+"This change needs openQ4 to start again, which it cannot do by itself on this device. Choose mods with the gear button's Mods page; for other changes, close openQ4 and open it again." = "This change needs openQ4 to start again, which it cannot do by itself on this device. Choose mods with the gear button's Mods page; for other changes, close openQ4 and open it again.";
+"Restart needed" = "Restart needed";
+"New Interface" = "New Interface";

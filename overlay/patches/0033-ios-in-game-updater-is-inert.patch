@@ -1,0 +1,40 @@
+--- a/src/framework/Updater.cpp
++++ b/src/framework/Updater.cpp
+@@ -571,7 +571,27 @@
+ 	cmdSystem->AddCommand( "updateCheck", UpdateCheck_f, CMD_FL_SYSTEM, "checks the openQ4 releases for a newer version" );
+ }
+ 
++#if defined( __APPLE__ ) && TARGET_OS_IPHONE
++// openQ4-ios D-122: the app updates through SideStore or the OTA page it was
++// installed from, never from inside the game (an iOS app cannot replace its own
++// signed bundle, and upstream's release archives are desktop builds). The
++// Updates button stays in the classic menu but says so instead of fetching;
++// nothing here touches the network. Text from the shell (openq4_ios_loc.m 10).
++extern "C" const char *OpenQ4_iOS_SaveText( int which );
++#endif
++
+ void Updater_Check( bool fromMenu ) {
++#if defined( __APPLE__ ) && TARGET_OS_IPHONE
++	common->Printf( "Update: in-game updates are off on iOS/visionOS (SideStore or the OTA page update this app); %s\n",
++		fromMenu ? "told the player" : "startup check skipped" );
++	if ( fromMenu ) {
++		// Not a waiting (modal) box: a nested modal loop on the iOS engine
++		// thread stalls in the frame fence (sim-verified); the D-114 boxes in
++		// Session.cpp are non-waiting for the same reason.
++		session->MessageBox( MSG_OK, OpenQ4_iOS_SaveText( 10 ), UpdatesTitle(), false );
++	}
++	return;
++#endif
+ 	if ( pendingCheck ) {
+ 		pendingCheck->fromMenu = pendingCheck->fromMenu || fromMenu;
+ 		return;
+@@ -584,6 +604,9 @@
+ }
+ 
+ void Updater_Frame( void ) {
++#if defined( __APPLE__ ) && TARGET_OS_IPHONE
++	return;	// D-122: no startup check, no installed-update report (see Updater_Check)
++#endif
+ 	if ( presenting || !TitleIsIdle() ) {
+ 		return;
+ 	}

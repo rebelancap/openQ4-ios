@@ -1,0 +1,67 @@
+--- a/src/sys/EventDisposition.cpp
++++ b/src/sys/EventDisposition.cpp
+@@ -46,3 +46,16 @@
+ bool Sys_EventDispositionTagCurrent(const sysEventDispositionTag_t& tag) noexcept {
+     return tag.ShapeValid() && tag.dispatchEpoch == Sys_EventDispositionEpoch() && tag.streamToken == Sys_EventQueueToken();
+ }
++
++#if defined( __APPLE__ )
++#include <TargetConditionals.h>
++#if TARGET_OS_IPHONE
++// openQ4-ios (D-118): the iOS engine thread takes over event disposition from
++// the main thread that ran idEventLoop::Init (Common.cpp
++// OpenQ4_iOS_AdoptEngineThreadIdentity).
++void Sys_iOS_AdoptEventDispositionThread() {
++    std::lock_guard<std::mutex> lock(dispositionMutex);
++    if (dispositionBound) dispositionThread = std::this_thread::get_id();
++}
++#endif
++#endif
+--- a/src/ui/RetainedUI.cpp
++++ b/src/ui/RetainedUI.cpp
+@@ -2534,3 +2534,20 @@
+ bool RetainedUI_ProcessEvent(const sysEvent_s*) { return false; }
+ void RetainedUI_QueueInput(const retainedUIInput_t&, int) {}
+ #endif
++
++#if defined( __APPLE__ ) && TARGET_OS_IPHONE
++// openQ4-ios (D-118): the iOS engine thread owns retained-UI edits after the
++// main thread ran RetainedUI_Init (Common.cpp OpenQ4_iOS_AdoptEngineThreadIdentity).
++void RetainedUI_iOS_AdoptEditThread() {
++	editThread = std::this_thread::get_id();
++	// Every view made during init (title, load game, credits, demos, arena,
++	// multiplayer, create server, join game, the HUD) owns a canvas bound to the
++	// init thread. Unadopted, each one reports an active callback on the engine
++	// thread (Runtime::HasActiveCanvasCallback), which makes BusyEditCanvas()
++	// true, RefreshResources() false and every view refuse to prepare, draw or
++	// be created: the black main menu of D-118/D-122.
++	int adopted = 0;
++	for (auto* view : views) if (view && view->runtime) { view->runtime->iOS_AdoptCanvasThread(); ++adopted; }
++	common->Printf("iOS: retained UI adopted %d view canvas(es) on the engine thread\n", adopted);
++}
++#endif
+--- a/src/ui/UserInterface.cpp
++++ b/src/ui/UserInterface.cpp
+@@ -2422,3 +2422,10 @@
+ 
+ 	return measureDc->GetMaxTextIndex( text, pixelLimit, textScale, wrapInfo );
+ }
++
++#if defined( __APPLE__ ) && TARGET_OS_IPHONE
++// openQ4-ios (D-118, Common.cpp OpenQ4_iOS_AdoptEngineThreadIdentity).
++void UI_iOS_AdoptNativePresenceThread() {
++	uiManagerLocal.nativePresenceThread = std::this_thread::get_id();
++}
++#endif
+--- a/src/ui/UserInterfaceLocal.h
++++ b/src/ui/UserInterfaceLocal.h
+@@ -331,6 +331,9 @@
+ 	bool textBoundaryActive = false, textBoundaryFailed = false;
+ 	// Init rebinds the global manager when the engine starts on another thread.
+ 	std::thread::id nativePresenceThread = std::this_thread::get_id();
++#if defined( __APPLE__ ) && TARGET_OS_IPHONE
++	friend void UI_iOS_AdoptNativePresenceThread();	// openQ4-ios D-118 (UserInterface.cpp)
++#endif
+ 	bool nativeBoundaryActive = false, nativeBoundaryFailed = false;
+ 	bool clipboardBoundaryActive = false, clipboardBoundaryFailed = false;
+ 	int applicationPumpDepth = 0;

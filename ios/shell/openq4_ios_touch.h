@@ -142,6 +142,10 @@ void OpenQ4_iOS_TouchSynthesizeTap(float nx, float ny);
  * transport (D-086).
  */
 int OpenQ4_iOS_TouchPressChrome(const char *name);
+/* Dev bridge `!kbdone` (D-123): the keyboard Done button. */
+void OpenQ4_iOS_TouchDismissKeyboard(void);
+/* Bottom of the top-corner chrome in window points (0: none), for the retained HUD (D-123). Any thread. */
+float OpenQ4_iOS_TouchHudTop(void);
 
 /*
  * Gyro aim (D-083).
@@ -172,6 +176,10 @@ void OpenQ4_iOS_SafeAreaFractions(float *l, float *t, float *r, float *b);
 void OpenQ4_iOS_PublishSafeArea(void);
 /* Tell SDL text input is over, so it does not re-present the keyboard. */
 void OpenQ4_iOS_StopTextInput(void);
+/* One engine key event by bind name; mode 1 down, 0 up, 2 both (macos_sdl3_main.cpp, D-123). */
+int OpenQ4_iOS_InjectKeyNamed(const char *name, int mode);
+/* The keyboard was dismissed by Done: a GUI field needs a new tap to bring it back (sdl3_backend.cpp, D-123). */
+void OpenQ4_iOS_NoteKeyboardDismissed(void);
 int  OpenQ4_iOS_InGame(void);
 int  OpenQ4_iOS_InCinematic(void);
 /*

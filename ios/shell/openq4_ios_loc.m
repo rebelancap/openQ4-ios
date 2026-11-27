@@ -42,9 +42,10 @@ NSString *OpenQ4_L(const char *key) {
  *
  * 2 carries one %s, the level's title, filled in by the engine.
  * 7 is the Load Game label of the autosave copy restartLevelFromSave keeps.
+ * 10 is the Updates button's answer (D-122, Updater.cpp): no in-game updates.
  */
 const char *OpenQ4_iOS_SaveText(int which) {
-	static const char *cache[10];
+	static const char *cache[13];
 	if (which < 0 || which >= (int)(sizeof(cache) / sizeof(cache[0]))) {
 		return "";
 	}
@@ -66,6 +67,11 @@ const char *OpenQ4_iOS_SaveText(int which) {
 								 "If Load Game already lists nine \"Before restart\" copies of this level, delete one and try again."); break;
 			case 9: s = OpenQ4_L("This save could not be restored. Start %s again from the beginning, with the weapons and armor you had? "
 								 "This replaces the level's autosave; a copy of it is kept in the list."); break;
+			// D-122: the in-game Updates button (Updater.cpp) on iOS/visionOS.
+			case 10: s = OpenQ4_L("openQ4 on iPhone, iPad and Apple Vision Pro is updated through SideStore or the page you installed it from, not from inside the game."); break;
+			// D-123: reloadEngine (Mods > Load, a renderer restart) refused on iOS/visionOS (Common.cpp).
+			case 11: s = OpenQ4_L("This change needs openQ4 to start again, which it cannot do by itself on this device. Choose mods with the gear button's Mods page; for other changes, close openQ4 and open it again."); break;
+			case 12: s = OpenQ4_L("Restart needed"); break;
 			}
 			cache[which] = strdup(s != nil ? s.UTF8String : "");
 		}

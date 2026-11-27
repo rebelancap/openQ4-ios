@@ -69,6 +69,8 @@
  * the shell/engine line (overlay patch 0005, src/sys/sdl3/sdl3_backend.cpp).
  */
 extern int OpenQ4_iOS_SynthesizeMenuTap(float nx, float ny);
+extern int OpenQ4_iOS_InjectKeyNamed(const char *name, int mode);
+extern int OpenQ4_iOS_SynthesizeMenuDrag(float x0, float y0, float x1, float y1);
 extern int OpenQ4_iOS_InjectPadState(float lookX, float lookY, float moveX, float moveY,
                                      float rightTrigger, int active);
 extern void OpenQ4_iOS_PrintPadMenuState(void);
@@ -1048,6 +1050,63 @@ static int BridgeHandleLocalCommand(const char *cmd) {
 	 * closes it), so without this there is no way to photograph it on a device
 	 * that cannot be touched.
 	 */
+	/*
+	 * `!key <name> [1|0|tap]` — one engine key event by bind name (D-123):
+	 * the retained menus' keyboard and pad paths (ESCAPE, ENTER, JOY3 = A,
+	 * JOY4 = B, JOY9-12 = D-pad) on a simulator that has neither.
+	 * `!text <string>` — type into whatever text field has the keyboard, through
+	 * UIKit's own insertText: on the first responder (what the keyboard does).
+	 * `!kbdone` — the keyboard's Done button (the overlay's dismissKeyboard).
+	 */
+	if (strncmp(cmd, "!menudrag ", 10) == 0) {
+		float x0, y0, x1, y1;
+		if (sscanf(cmd + 10, "%f %f %f %f", &x0, &y0, &x1, &y1) == 4) {
+			OpenQ4_iOS_SynthesizeMenuDrag(x0, y0, x1, y1);
+		} else {
+			fprintf(stdout, "openQ4 bridge: usage: !menudrag <x0> <y0> <x1> <y1> (normalised)\n");
+			fflush(stdout);
+		}
+		return 1;
+	}
+	if (strncmp(cmd, "!key ", 5) == 0) {
+		char name[64] = {0}, how[16] = {0};
+		const int n = sscanf(cmd + 5, "%63s %15s", name, how);
+		const int mode = (n < 2 || strcmp(how, "tap") == 0) ? 2 : (atoi(how) ? 1 : 0);
+		const int key = OpenQ4_iOS_InjectKeyNamed(name, mode);
+		fprintf(stdout, "openQ4 bridge: key '%s' (%d) %s\n", name, key,
+				key < 0 ? "UNKNOWN" : mode == 2 ? "tap" : mode ? "down" : "up");
+		fflush(stdout);
+		return 1;
+	}
+	if (strncmp(cmd, "!text ", 6) == 0) {
+		NSString *text = [NSString stringWithUTF8String:cmd + 6];
+		dispatch_async(dispatch_get_main_queue(), ^{
+			UIResponder *first = nil;
+			for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+				if (![scene isKindOfClass:UIWindowScene.class]) { continue; }
+				for (UIWindow *w in ((UIWindowScene *)scene).windows) {
+					NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithObject:w];
+					while (stack.count > 0 && first == nil) {
+						UIView *v = stack.lastObject; [stack removeLastObject];
+						if (v.isFirstResponder) { first = v; break; }
+						[stack addObjectsFromArray:v.subviews];
+					}
+				}
+			}
+			const BOOL ok = [first conformsToProtocol:@protocol(UIKeyInput)];
+			if (ok) { [(id<UIKeyInput>)first insertText:text]; }
+			fprintf(stdout, "openQ4 bridge: text '%s' -> %s\n", text.UTF8String,
+					ok ? NSStringFromClass(first.class).UTF8String : "NO FIRST RESPONDER");
+			fflush(stdout);
+		});
+		return 1;
+	}
+	if (strcmp(cmd, "!kbdone") == 0) {
+		OpenQ4_iOS_TouchDismissKeyboard();
+		fprintf(stdout, "openQ4 bridge: keyboard Done\n");
+		fflush(stdout);
+		return 1;
+	}
 	if (strncmp(cmd, "!button ", 8) == 0) {
 		char name[64] = {0};
 		int down = 0;
@@ -1232,6 +1291,9 @@ static atomic_int g_catchUpFrames  = 0;
  * stack — the actual defect — with no concurrency introduced at all.
  */
 extern int OpenQ4_iOS_AdoptRendererThread(void);
+extern void OpenQ4_iOS_AdoptEngineThreadIdentity(void);
+extern void OpenQ4_iOS_SnapshotRendererConfig(void);
+extern int OpenQ4_iOS_AdoptRendererConfig(void);
 
 static void *OpenQ4_EngineThread(void *arg) {
 	(void)arg;
@@ -1239,11 +1301,23 @@ static void *OpenQ4_EngineThread(void *arg) {
 	OpenQ4_iOS_SetSampleTargetToSelf();
 	// v0.14 renderer: ownership follows the frame loop off the main thread
 	// (D-116; overlay 0029). Before the first frame, so no render work races it.
+	// v0.14.1 (D-118): the Vulkan module's glConfig is thread_local; adopt the
+	// copy the main thread finished init with, or every frame here returns
+	// from EndFrame before drawing anything.
+	if (!OpenQ4_iOS_AdoptRendererConfig()) {
+		fprintf(stderr, "openQ4: FATAL: no renderer config to hand to the engine thread\n");
+		abort();
+	}
 	if (!OpenQ4_iOS_AdoptRendererThread()) {
 		fprintf(stderr, "openQ4: FATAL: the engine thread could not adopt the renderer\n");
 		abort();
 	}
 	fprintf(stdout, "openQ4: renderer owner thread handed to the engine thread\n");
+	// v0.14.1 (D-118): the engine's main-thread identity (print queue,
+	// filesystem pacifier, event disposition, retained-UI and GUI-manager
+	// owners) follows the frame loop too, or every print after init is queued
+	// for a thread that never runs another frame.
+	OpenQ4_iOS_AdoptEngineThreadIdentity();
 	for (;;) {
 		dispatch_semaphore_wait(g_frameSem, DISPATCH_TIME_FOREVER);
 		OpenQ4_iOS_EngineFrame();
@@ -1288,6 +1362,9 @@ static void OpenQ4_StartEngineThreadOnce(void) {
 		return;
 	}
 	started = 1;
+
+	// Main thread, init finished: the engine thread adopts this (D-118).
+	OpenQ4_iOS_SnapshotRendererConfig();
 
 	pthread_attr_t attr;
 	pthread_attr_init(&attr);

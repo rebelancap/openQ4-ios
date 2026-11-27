@@ -1,5 +1,5 @@
---- a/src/sys/osx/macosx_sdl3_main.cpp
-+++ b/src/sys/osx/macosx_sdl3_main.cpp
+--- a/src/sys/macos/macos_sdl3_main.cpp
++++ b/src/sys/macos/macos_sdl3_main.cpp
 @@ -11,12 +11,35 @@
  
  #include "../../idlib/precompiled.h"
@@ -36,7 +36,7 @@
  static void Sys_HandlePendingQuitSignal(void) {
  	const int quitSignal = Posix_ConsumeQuitSignal();
  	if (quitSignal == 0) {
-@@ -26,37 +49,762 @@
+@@ -26,37 +49,782 @@
  	Posix_SetExit(128 + quitSignal);
  	common->Printf("Exiting on %s\n", Posix_SignalName(quitSignal));
  	common->Quit();
@@ -235,6 +235,26 @@
 +	// and GUI code believing escape is held for the rest of the session.
 +	Posix_QueEvent( SE_KEY, K_ESCAPE, 1, 0, NULL );
 +	Posix_QueEvent( SE_KEY, K_ESCAPE, 0, 0, NULL );
++}
++
++/*
++ * Dev bridge (`!key <name> [1|0|tap]`, D-123): one engine key event by its
++ * bind name (ESCAPE, ENTER, JOY3, UPARROW, ...), so a round can drive the
++ * retained menus' keyboard and pad paths on a simulator that has neither.
++ * Returns the key number, or -1 for an unknown name.
++ */
++extern "C" int OpenQ4_iOS_InjectKeyNamed( const char *name, int mode ) {
++	const int key = idKeyInput::StringToKeyNum( name );
++	if ( key <= 0 ) {
++		return -1;
++	}
++	if ( mode != 0 ) {
++		Posix_QueEvent( SE_KEY, key, 1, 0, NULL );
++	}
++	if ( mode != 1 ) {
++		Posix_QueEvent( SE_KEY, key, 0, 0, NULL );
++	}
++	return key;
 +}
 +
 +extern "C" void OpenQ4_iOS_InjectButton( const char *name, int down ) {

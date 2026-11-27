@@ -30,15 +30,28 @@
  idCVar com_developer( "developer", "0", CVAR_BOOL|CVAR_SYSTEM|CVAR_NOCHEAT, "developer mode" );
  idCVar com_purgeAll( "com_purgeAll", "0", CVAR_BOOL | CVAR_ARCHIVE | CVAR_SYSTEM, "purge everything between level loads" );
  idCVar com_makingBuild( "com_makingBuild", "0", CVAR_BOOL | CVAR_SYSTEM, "1 when making a build" );
-@@ -93,6 +101,7 @@
+@@ -93,9 +101,13 @@
  idCVar r_windowWidth( "r_windowWidth", "1280", CVAR_RENDERER | CVAR_ARCHIVE | CVAR_INTEGER, "windowed mode width" );
  idCVar r_windowHeight( "r_windowHeight", "720", CVAR_RENDERER | CVAR_ARCHIVE | CVAR_INTEGER, "windowed mode height" );
  idCVar r_skipGuiShaders( "r_skipGuiShaders", "0", CVAR_RENDERER | CVAR_INTEGER, "1 = skip all gui elements on surfaces, 2 = skip drawing but still handle events, 3 = draw but skip events", 0, 3, idCmdSystem::ArgCompletion_Integer<0,3> );
 +#endif /* !OPENQ4_RENDERER_MODULE_STATIC */
  
  static const renderModuleServices_t *rgm_services = NULL;
+ 
++#ifndef OPENQ4_RENDERER_MODULE_STATIC
++// openQ4-ios (D-118): v0.14.1 forwarders to engine functions; statically linked,
++// the engine's own definitions (UsercmdGen.cpp, Common.cpp) are the ones called.
+ void Usercmd_TakeFrameInputClocks( double &look, double &flash ) {
+ 	look = flash = 0.0;
+ 	if ( rgm_services && rgm_services->TakeFrameInputClocks ) {
+@@ -108,13 +120,16 @@
+ 		rgm_services->RecordFrameInputToSwap( look, flash, swap );
+ 	}
+ }
++#endif /* !OPENQ4_RENDERER_MODULE_STATIC */
  static const renderWindowServices_t *rgm_windowServices = NULL;
-@@ -101,7 +110,9 @@
+ static renderExport_t rgm_export;
+ 
  // the engine-owned window state is mirrored through the import; the module's
  // engineWindowState instance satisfies the renderer sources' references and
  // is refreshed from the services on demand
@@ -48,7 +61,7 @@
  
  /*
  ====================
-@@ -111,9 +122,11 @@
+@@ -124,9 +139,11 @@
  platform backend.
  ====================
  */
@@ -60,7 +73,7 @@
  
  /*
  ====================
-@@ -123,26 +136,37 @@
+@@ -136,26 +153,37 @@
  definitions route them over the services table.
  ====================
  */
@@ -98,7 +111,7 @@
  bool Sys_GetDesktopResolution( int *width, int *height ) {
  	if ( rgm_windowServices == NULL || rgm_windowServices->GetDesktopResolution == NULL ) {
  		return false;
-@@ -150,12 +174,15 @@
+@@ -163,12 +191,15 @@
  	rgm_windowServices->GetDesktopResolution( width, height );
  	return true;
  }
@@ -114,7 +127,7 @@
  
  #if defined( MACOS_X )
  /*
-@@ -177,6 +204,7 @@
+@@ -190,6 +221,7 @@
  itself fails.
  ====================
  */
@@ -122,7 +135,7 @@
  const char *Sys_EXEPath( void ) {
  	static char exePath[ PATH_MAX ];
  
-@@ -189,24 +217,31 @@
+@@ -202,24 +234,31 @@
  	return exePath;
  }
  #endif
@@ -154,7 +167,7 @@
  
  /*
  ====================
-@@ -218,8 +253,12 @@
+@@ -231,8 +270,12 @@
  appear in the engine's Sys_ListThreads output.
  ====================
  */
@@ -167,7 +180,7 @@
  
  static void RGM_RemoveThreadInfo( xthreadInfo &info ) {
  	Sys_EnterCriticalSection( CRITICAL_SECTION_ZERO );
-@@ -238,9 +277,11 @@
+@@ -251,9 +294,11 @@
  	Sys_LeaveCriticalSection( CRITICAL_SECTION_ZERO );
  }
  
@@ -179,7 +192,7 @@
  
  bool Sys_IsThreadStopRequested( const xthreadInfo &info ) {
  	return info.stopRequested;
-@@ -248,6 +289,7 @@
+@@ -261,6 +306,7 @@
  
  #if defined( _WIN32 )
  
@@ -187,7 +200,7 @@
  void Sys_CreateThread( xthread_t function, void *parms, xthreadPriority priority, xthreadInfo &info, const char *name, xthreadInfo *threads[MAX_THREADS], int *thread_count ) {
  	DWORD threadId = 0;
  	HANDLE temp = CreateThread( NULL, 0, ( LPTHREAD_START_ROUTINE )function, parms, 0, &threadId );
-@@ -272,7 +314,9 @@
+@@ -285,7 +331,9 @@
  		common->DPrintf( "WARNING: MAX_THREADS reached\n" );
  	}
  }
@@ -197,7 +210,7 @@
  bool Sys_IsCurrentThreadStopRequested( void ) {
  	const DWORD id = GetCurrentThreadId();
  	bool stopRequested = false;
-@@ -286,7 +330,9 @@
+@@ -299,7 +347,9 @@
  	Sys_LeaveCriticalSection( CRITICAL_SECTION_ZERO );
  	return stopRequested;
  }
@@ -207,7 +220,7 @@
  void Sys_DestroyThread( xthreadInfo &info ) {
  	Sys_RequestThreadStop( info );
  	WaitForSingleObject( reinterpret_cast<HANDLE>( info.threadHandle ), INFINITE );
-@@ -296,6 +342,7 @@
+@@ -309,6 +359,7 @@
  	info.stopRequested = false;
  	RGM_RemoveThreadInfo( info );
  }
@@ -215,7 +228,7 @@
  
  #else
  
-@@ -317,6 +364,7 @@
+@@ -330,6 +381,7 @@
  	return thread;
  }
  
@@ -223,7 +236,7 @@
  void Sys_CreateThread( xthread_t function, void *parms, xthreadPriority priority, xthreadInfo &info, const char *name, xthreadInfo *threads[MAX_THREADS], int *thread_count ) {
  	( void )priority;
  	info.threadHandle = 0;
-@@ -349,7 +397,9 @@
+@@ -362,7 +414,9 @@
  	}
  	Sys_LeaveCriticalSection( CRITICAL_SECTION_ZERO );
  }
@@ -233,7 +246,7 @@
  bool Sys_IsCurrentThreadStopRequested( void ) {
  	const pthread_t thread = pthread_self();
  	bool stopRequested = false;
-@@ -363,7 +413,9 @@
+@@ -376,7 +430,9 @@
  	Sys_LeaveCriticalSection( CRITICAL_SECTION_ZERO );
  	return stopRequested;
  }
@@ -243,7 +256,7 @@
  void Sys_DestroyThread( xthreadInfo &info ) {
  	if ( info.threadHandle == 0 ) {
  		return;
-@@ -375,6 +427,7 @@
+@@ -388,6 +444,7 @@
  	info.stopRequested = false;
  	RGM_RemoveThreadInfo( info );
  }
@@ -251,7 +264,7 @@
  
  #endif
  
-@@ -386,19 +439,29 @@
+@@ -399,19 +456,29 @@
  these entry points are inert so the shared renderer sources link unchanged.
  ====================
  */
@@ -281,15 +294,26 @@
  bool R_RendererModule_ResetApiAfterDeviceFailure( void ) {
  	// the loader owns the archived r_renderApi selection
  	if ( rgm_services != NULL && rgm_services->ResetRenderApiAfterDeviceFailure != NULL ) {
-@@ -433,6 +496,7 @@
+@@ -446,7 +513,10 @@
  		rgm_services->RendererDeviceEvent( event );
  	}
  }
 +#endif /* !OPENQ4_RENDERER_MODULE_STATIC */
  
++#ifndef OPENQ4_RENDERER_MODULE_STATIC
++// openQ4-ios (D-118): statically linked, RendererModule.cpp defines these.
+ // OpenXR on Vulkan (render API 32): the runtime creates the instance and device.
+ bool R_RendererModule_CreateVulkanInstanceForVR( void *getInstanceProcAddr, const void *createInfo,
+ 		void **outInstance, int *outResult ) {
+@@ -470,6 +540,7 @@
+ 	}
+ 	return false;
+ }
++#endif /* !OPENQ4_RENDERER_MODULE_STATIC */
+ 
  #if defined( OPENQ4_RENDERER_GL_MODULE ) || defined( OPENQ4_RENDERER_GLES_MODULE )
  /*
-@@ -495,8 +559,22 @@
+@@ -537,8 +608,22 @@
  #ifdef OPENQ4_RENDERER_VK_MODULE
  	VK_Bringup_Shutdown();
  #endif
@@ -312,7 +336,7 @@
  }
  
  #if defined( _WIN32 )
-@@ -544,16 +622,27 @@
+@@ -586,16 +671,27 @@
  	idLib::cvarSystem = cvarSystem;
  	idLib::fileSystem = fileSystem;
  

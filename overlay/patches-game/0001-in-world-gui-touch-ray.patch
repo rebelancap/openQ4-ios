@@ -1,6 +1,6 @@
 --- a/src/game/Player.cpp
 +++ b/src/game/Player.cpp
-@@ -7052,14 +7052,49 @@
+@@ -7303,14 +7303,49 @@
  		return;
  	}
  
@@ -52,9 +52,9 @@
  			command = ui->HandleEvent( &ev, gameLocal.time, &updateVisuals );
  			if ( updateVisuals && focusEnt && ui == focusUI ) {
  				focusEnt->UpdateVisuals();
-@@ -7488,7 +7523,57 @@
- 	talkCursor = 0;
- 	start = GetEyePosition();
+@@ -7747,7 +7782,57 @@
+ 		GetVRHeadOrigin( start );
+ 	}
  	end = start + viewAngles.ToForward() * 768.0f;
 +
 +#ifdef OPENQ4_IOS
@@ -110,7 +110,7 @@
   	// player identification -> names to the hud
   	if ( gameLocal.isMultiplayer && entityNumber == gameLocal.localClientNum ) {
  		trace_t trace;
-@@ -7969,12 +8054,26 @@
+@@ -8228,12 +8313,26 @@
  
  			const float guiFocusLength = ( end - start ).LengthFast() * pt.fraction;
  
@@ -137,7 +137,7 @@
  				ClearFocus ( );
  				focusType = FOCUS_BRACKETS;
  #ifdef _XENON
-@@ -8053,6 +8152,9 @@
+@@ -8315,6 +8414,9 @@
  			hud->SetStateInt( "hideInteractive", 0 );
  #endif
  
@@ -147,7 +147,7 @@
  			SetFocus ( FOCUS_GUI, FOCUS_GUI_TIME, ent, ui );
  			break;
  		}
-@@ -8120,6 +8222,31 @@
+@@ -8382,6 +8484,31 @@
   		cursor->SetStateInt( "talkcursor", talkCursor );
   	}
   
@@ -181,7 +181,7 @@
  /*
 --- a/src/mpgame/Player.cpp
 +++ b/src/mpgame/Player.cpp
-@@ -7436,14 +7436,49 @@
+@@ -7922,14 +7922,49 @@
  		return;
  	}
  
@@ -233,7 +233,7 @@
  			command = ui->HandleEvent( &ev, gameLocal.time, &updateVisuals );
  			if ( updateVisuals && focusEnt && ui == focusUI ) {
  				focusEnt->UpdateVisuals();
-@@ -7975,7 +8010,57 @@
+@@ -8620,7 +8655,57 @@
  	talkCursor = 0;
  	start = GetEyePosition();
  	end = start + viewAngles.ToForward() * 768.0f;
@@ -291,7 +291,7 @@
   	// player identification -> names to the hud
   	if ( gameLocal.isMultiplayer && IsLocalClient() ) {
  		trace_t trace;
-@@ -8411,12 +8496,26 @@
+@@ -9062,12 +9147,26 @@
  
  			const float guiFocusLength = ( end - start ).LengthFast() * pt.fraction;
  
@@ -318,7 +318,7 @@
  				ClearFocus ( );
  				focusType = FOCUS_BRACKETS;
  #ifdef _XENON
-@@ -8495,6 +8594,9 @@
+@@ -9146,6 +9245,9 @@
  			hud->SetStateInt( "hideInteractive", 0 );
  #endif
  
@@ -328,7 +328,7 @@
  			SetFocus ( FOCUS_GUI, FOCUS_GUI_TIME, ent, ui );
  			break;
  		}
-@@ -8562,6 +8664,31 @@
+@@ -9213,6 +9315,31 @@
   		cursor->SetStateInt( "talkcursor", talkCursor );
   	}
   

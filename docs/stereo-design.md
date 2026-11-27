@@ -50,7 +50,7 @@ separate dylib and stays unmodified; the eye lives entirely in the engine.
   `modelViewMatrix[12] -= e`, with `e = (eye == R ? +1 : -1) · sep/2`. Columns
   0–2 are untouched; `renderView.vieworg/viewaxis` are untouched, so
   `R_SetupViewFrustum`, portal visibility and light culling keep the centre
-  camera. The offset (default 2.5 units ≈ IPD at Quake scale) is far below
+  camera. The offset (default 1.25 units since D-121; 2.5 ≈ IPD at Quake scale) is far below
   portal tolerances.
 - **Projection — `R_SetupProjection`** (`tr_main.cpp:880`): the off-axis skew
   `projectionMatrix[8] = -projectionMatrix[0] · e / conv` (zero parallax at
@@ -86,7 +86,7 @@ separate dylib and stays unmodified; the eye lives entirely in the engine.
   paragraph's first draft:** `tr_stereoEye` / `tr_stereoEyeOffset` (0/1/2,
   latched in `UpdateScreen`, never mid-frame) and `R_Stereo_SetEye` /
   `R_Stereo_Enabled` in overlay patch **0027** (`renderer/tr_main.cpp`);
-  `r_stereo3d` (0/1, shell-driven), `r_stereo3dSeparation` (units, 2.5),
+  `r_stereo3d` (0/1, shell-driven), `r_stereo3dSeparation` (units, 1.25 since D-121; was 2.5),
   `r_stereo3dConvergence` (units, 240 ≈ 20 ft — the spec's "Crosshair
   Distance"), `r_stereo3dGunDepth` (−1…+1, 0 = on the panel),
   `r_stereo3dGunConvergence` (units, 24), `r_stereo3dWidth`/`Height`
@@ -309,7 +309,9 @@ pair, and the foveation acts where the blur was — in the panel hop.
 - **Settings rows (visionOS-only section, spec order) — D-106 is current:**
   Screen Distance 1.0-8.0 m (3.6), Screen Width 1.2-8.0 m (5.5), Screen Height
   1.0-6.0 m (3.1), Screen Position Height -1.5...+10 m (0), **Stereo Depth
-  0-300 % (default 125 %**, 100 % = 2.5 u), Crosshair Distance 32-512 u (240),
+  0-200 %, default 100 %, 100 % = 1.25 u since 1.1.0.4 (D-121: rescaled so the
+  old 50 % is the new 100 %; the old scale was 0-300 % with 100 % = 2.5 u,
+  default 125 % D-106 → 1.1.0.2, 100 % in 1.1.0.3, D-120)**, Crosshair Distance 32-512 u (240),
   **Panel Resolution 1920x1080 ... 2880x1620 per eye, default 2560x1440 with
   1920x1080 the hard floor** (the floor is in `r_stereo3dWidth/Height`'s own
   cvar range, not only in the row's list), Surroundings Dimming 0-100 % (80),
@@ -321,9 +323,13 @@ pair, and the foveation acts where the blur was — in the panel hop.
   inside the 3D section and swaps out on the way past.
   **Gun Depth and Foveation are no longer rows at all.** Gun depth is
   hardcoded at +0.39 in `r_stereo3dGunDepth`'s default and the sheet does not
-  push it; foveation is asked for whenever the device supports it. Both are
+  push it (D-120 adds `r_stereo3dGunScale`, default 0.6: the weapon's eye
+  separation is gunDepth × gunScale of the world's, convergence still
+  `r_stereo3dGunConvergence` 24 — it shortens the gun's depth range; bridge-tunable,
+  no row); foveation is asked for whenever the device supports it. Both are
   the maintainer's 0.1.0.61 hardware verdicts (Q-032, Q-037).
-  A **settings schema stamp** (`openq4.settingsSchema`, currently 2) clears the
+  A **settings schema stamp** (`openq4.settingsSchema`, currently 4; steps 3
+  (D-120) and 4 (D-121, the rescale) each remove only a stored Stereo Depth) clears the
   stored `vp3d*` keys once per install, because a changed DEFAULT never moves
   an install that already has a stored value.
   All live while dragging; lengths stored in metres; strings through

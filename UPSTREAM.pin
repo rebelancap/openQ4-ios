@@ -8,17 +8,21 @@
 # applies). See DECISIONS.md D-001, D-110 and D-116.
 
 OPENQ4_REPO=https://github.com/themuffinator/openQ4
-OPENQ4_REF=v0.14.000
-OPENQ4_COMMIT=1621aa21534e75a1c0ade3fd480c00bcd8f378ee
-OPENQ4_DATE=2026-10-12
-OPENQ4_DESC=Bound Android packaging memory and avoid recompressing PK4 archives
+OPENQ4_REF=v0.15.0
+OPENQ4_COMMIT=0fc858e6e7ea771859c122249a255a402f9c6363
+OPENQ4_DATE=2026-11-22
+# OPENQ4_BUILD: the upstream commit count of OPENQ4_COMMIT (`git rev-list --count`
+# on a full clone), i.e. the build number a full upstream checkout stamps into
+# saves. It is the iOS build number from v0.14.1 on (D-118).
+OPENQ4_BUILD=2636
+OPENQ4_DESC=Ship the Linux updater helper through the release's symbol split and verifier (#251)
 
 OPENQ4_GAME_REPO=https://github.com/themuffinator/openQ4
-OPENQ4_GAME_COMMIT=1621aa21534e75a1c0ade3fd480c00bcd8f378ee
-OPENQ4_GAME_DATE=2026-10-12
+OPENQ4_GAME_COMMIT=0fc858e6e7ea771859c122249a255a402f9c6363
+OPENQ4_GAME_DATE=2026-11-22
 
-# Pin rationale (D-116): pinned to the release TAG v0.14.000, as the charter
-# prefers. The game half is the same commit: upstream's release workflow run
+# Pin rationale (D-118): pinned to the release TAG v0.14.1, as the charter
+# prefers (v0.14.1 replaces the withdrawn 0.14.0; D-116 had pinned v0.14.000). The game half is the same commit: upstream's release workflow run
 # 38297252865 logs "In-tree game resolved SHA: 1621aa21…" for every platform.
 #
 # History: D-001/D-003 pinned 227ee810 (main, past v0.9.0) for the Arena

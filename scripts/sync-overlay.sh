@@ -154,7 +154,7 @@ case "$PAKS_SOURCE" in
 			echo "FATAL: the oracle tree is at ${ORACLE_COMMIT:-<none>}, UPSTREAM.pin says $PIN_COMMIT" >&2
 			echo "       its packs are stale for this pin — run scripts/bump-pin.sh (it moves and rebuilds the oracle)" >&2
 			exit 1; }
-		for f in pak0.pk4 pak1.pk4; do
+		for f in $(openq4_pak_names); do
 			[ "$PAKS_DIR/$f" -nt "$ROOT/work/oracle/openQ4/.git/HEAD" ] || {
 				echo "FATAL: $PAKS_DIR/$f predates the oracle's last checkout — rebuild the oracle (meson compile -C work/oracle/openQ4/builddir)" >&2
 				exit 1; }
@@ -168,9 +168,18 @@ case "$PAKS_SOURCE" in
 		echo "!!  OPENQ4_PAKS_DIR is set: using $PAKS_DIR without a pin check" >&2 ;;
 esac
 ORACLE_PAKS="$PAKS_DIR"
-if [ -f "$ORACLE_PAKS/pak0.pk4" ] && [ -f "$ORACLE_PAKS/pak1.pk4" ]; then
-	python3 "$TREE/tools/build/generate_pak_header.py" \
-		--pak0 "$ORACLE_PAKS/pak0.pk4" --pak1 "$ORACLE_PAKS/pak1.pk4" \
+PAK_NAMES="$(openq4_pak_names)"
+[ -n "$PAK_NAMES" ] || { echo "FATAL: no packs listed by vendor/openQ4/tools/build/content_packs.py" >&2; exit 1; }
+PACK_ARGS=()
+HAVE_PAKS=1
+for f in $PAK_NAMES; do
+	[ -f "$ORACLE_PAKS/$f" ] || HAVE_PAKS=0
+	PACK_ARGS+=( --pack "$f=$ORACLE_PAKS/$f" )
+done
+if [ "$HAVE_PAKS" = 1 ]; then
+	# One --pack per entry of content_packs.json, as meson.build passes them
+	# (v0.14.1 split baseoq4 into pak0/pak1/pak2, D-118).
+	python3 "$TREE/tools/build/generate_pak_header.py" "${PACK_ARGS[@]}" \
 		--header-out "$GEN/openq4_paks_generated.h" > /dev/null
 	[ -f "$GEN/openq4_paks_generated.h" ] || { echo "FATAL: pak header not generated" >&2; exit 1; }
 else

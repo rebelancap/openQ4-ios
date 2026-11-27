@@ -45,3 +45,14 @@ openq4_paks_source() {
 		echo vendor
 	fi
 }
+
+# The runtime pack file names, from upstream's own table
+# (vendor/openQ4/tools/build/content_packs.json, read through its content_packs.py
+# exactly as meson.build does). v0.14.1 split baseoq4 into pak0 (core), pak1
+# (light grids) and pak2 (loadscreens) (D-118); every consumer iterates this list
+# instead of naming packs, so the next split cannot silently leave one behind.
+openq4_pak_names() {
+	local root
+	root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+	python3 "$root/vendor/openQ4/tools/build/content_packs.py" meson-list | cut -d'|' -f1
+}

@@ -84,7 +84,8 @@ fi
 # Pin-derived, identical to the engine header's OPENQ4_VERSION_RESOURCE_BUILD.
 # Parsed out of the generated header rather than recomputed, so the two can
 # never drift apart.
-HEADER="$ROOT/build/ios-gen/openq4_version_generated.h"
+# Since v0.15.0 the build fields live in upstream's second header (D-122).
+HEADER="$ROOT/build/ios-gen/openq4_build_id_generated.h"
 "$ROOT/scripts/gen-version-header.sh" --print-hash > /dev/null
 RESOURCE_BUILD="$(sed -n 's/^#define OPENQ4_VERSION_RESOURCE_BUILD //p' "$HEADER" | tr -d ' \r')"
 case "$RESOURCE_BUILD" in

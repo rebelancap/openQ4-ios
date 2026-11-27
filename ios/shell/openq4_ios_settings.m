@@ -30,6 +30,13 @@
 #endif
 
 /*
+ * World units of eye separation that the Stereo Depth row's 100% stands for
+ * (D-121: 1.25, the old scale's 50%). Must equal r_stereo3dSeparation's default
+ * in overlay patch 0027. Defined on iOS too: schema step 4 logs it.
+ */
+#define OPENQ4_STEREO_SEP_AT_100 1.25f
+
+/*
  * Row kinds. A plain slider/toggle table is not enough: the audio options are
  * meaningless without a sentence each ("duck" and "mix" mean nothing to a
  * player), and the layout editor is an action rather than a value.
@@ -301,6 +308,11 @@ static const openq4Setting_t kSettings[] = {
 	// vkQuake ios_settings.m:684 calls this exact switch "FPS Counter".
 	{ "showFPS",     "FPS Counter",
 	  "com_showFPS", "Display", 0.0f, 0.0f, 1.0f, OPENQ4_ROW_SWITCH },
+	// D-123: upstream's new (retained) menus and Remastered HUD, the default
+	// again from 1.1.0.5. Off is the classic interface — upstream keeps it one
+	// setting away (ui_retained), and on iOS there is no console to reach it.
+	{ "newInterface", "New Interface",
+	  "ui_retained", "Display", 1.0f, 0.0f, 1.0f, OPENQ4_ROW_SWITCH },
 
 	// --- Audio ---------------------------------------------------------------
 	{ "soundVolume", "Game Volume",
@@ -380,15 +392,20 @@ static const openq4Setting_t kSettings[] = {
 	  NULL, "3D", 0.0f, -1.5f, 10.0f, OPENQ4_ROW_SLIDER },
 	/*
 	 * Stereo Depth is a PERCENTAGE of the shipped eye separation, not a raw
-	 * world distance: 100% is 2.5 world units, about a human IPD at Quake's
-	 * scale. A percentage is the only form of this control anyone can reason
-	 * about without knowing what a Quake unit is.
+	 * world distance: 100% is 1.25 world units (OPENQ4_STEREO_SEP_AT_100 below).
+	 * A percentage is the only form of this control anyone can reason about
+	 * without knowing what a Quake unit is.
 	 *
-	 * 125% default and 300% ceiling are the maintainer's numbers from the 0.1.0.61
-	 * headset round (D-106), replacing the 100%/320% this shipped with.
+	 * History of the scale: until 1.1.0.3, 100% meant 2.5 units (about a human
+	 * IPD at Quake's scale), default 125% (D-106) then 100% (D-120), ceiling
+	 * 300%. The maintainer's 1.1.0.3 headset verdict (D-121): "the defaults
+	 * should be 50%, max should be 200 — rescale it so that old 50% is 100% on
+	 * the new scale". So the unit behind the percentage halved: new 100% =
+	 * 1.25 u (old 50%), new ceiling 200% = 2.5 u (old 100%). Schema step 4 below
+	 * removes a stored value, which on the old scale means something else.
 	 */
 	{ "vp3dDepth",   "Stereo Depth",
-	  NULL, "3D", 1.25f, 0.0f, 3.0f, OPENQ4_ROW_SLIDER },
+	  NULL, "3D", 1.0f, 0.0f, 2.0f, OPENQ4_ROW_SLIDER },
 	{ "vp3dConv",    "Crosshair Distance",
 	  NULL, "3D", 240.0f, 32.0f, 512.0f, OPENQ4_ROW_SLIDER },
 	/*
@@ -512,6 +529,16 @@ static void PushToEngine(const openq4Setting_t *s, float value) {
 	if (s == NULL || s->cvar == NULL) {
 		return;
 	}
+	// OPENQ4_MUTE=1 (environment): unattended simulator runs play through the
+	// host Mac's speakers, so the scripted gates launch with this set and every
+	// volume row pushes 0 instead of the stored value. Nothing is written to
+	// NSUserDefaults; a launch without the variable is untouched. The variable
+	// reaches the visionOS SwiftUI entry too, which ignores launch arguments.
+	const char *mute = getenv("OPENQ4_MUTE");
+	if (mute != NULL && strcmp(mute, "1") == 0
+			&& (strcmp(s->cvar, "s_volume") == 0 || strcmp(s->cvar, "s_musicVolume") == 0)) {
+		value = 0.0f;
+	}
 	char buf[64];
 	if (strcmp(s->key, "showFPS") == 0) {
 		// com_showFPS is 0/1/2, and 1 only draws while a map is spawned with no
@@ -588,12 +615,14 @@ void OpenQ4_Apply3DSettings(void) {
 	OpenQ4_Immersive_SetHeight(posH);
 	OpenQ4_Immersive_SetDim(dim);
 
-	// Stereo Depth is a percentage of the shipped 2.5-unit separation; the
-	// engine cvar is in world units, and the conversion lives here so the stored
-	// value stays the thing the slider shows.
+	// Stereo Depth is a percentage of OPENQ4_STEREO_SEP_AT_100 world units (1.25
+	// since D-121, which is also r_stereo3dSeparation's own default in overlay
+	// patch 0027, so engine and sheet agree); the engine cvar is in world units,
+	// and the conversion lives here so the stored value stays the thing the
+	// slider shows.
 	const float depth = OpenQ4_iOS_SettingFloat("vp3dDepth", 1.0f);
 	const float conv  = OpenQ4_iOS_SettingFloat("vp3dConv", 240.0f);
-	OpenQ4_Vision3D_Tune(depth * 2.5f, conv, NULL, NULL, NULL, NULL, NULL);
+	OpenQ4_Vision3D_Tune(depth * OPENQ4_STEREO_SEP_AT_100, conv, NULL, NULL, NULL, NULL, NULL);
 	/*
 	 * Gun depth is deliberately NOT pushed (D-106). The maintainer settled it at +0.39
 	 * on hardware and asked for it hardcoded, so the number lives in exactly
@@ -687,7 +716,7 @@ void OpenQ4_iOS_SettingSetFloat(const char *key, float value) {
  * row. Everything else a player has chosen — sensitivity, volumes, brightness,
  * layout — is untouched, and says so in the log.
  */
-#define OPENQ4_SETTINGS_SCHEMA 2
+#define OPENQ4_SETTINGS_SCHEMA 4
 
 static void OpenQ4_MigrateSettingsSchema(void) {
 	NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
@@ -733,6 +762,57 @@ static void OpenQ4_MigrateSettingsSchema(void) {
 				"build's defaults take effect; touchAlways %s. Nothing else changed.\n",
 				have, cleared,
 				hadAlways ? "migrated to touchMode" : "was never set");
+	}
+
+	if (have < 3) {
+		/*
+		 * Step 3 (D-120, 1.1.0.3) — Stereo Depth's default went 125% -> 100%
+		 * on the maintainer's 1.1.0.2 headset verdict. Only that one key is
+		 * touched: removed, so the row reads its new default. Nothing else in
+		 * the 3D section or anywhere else moves. An install coming straight
+		 * from schema < 2 already had every vp3d key cleared by step 2a.
+		 */
+		NSString *const kDepth = @"openq4.vp3dDepth";
+		id stored = [d objectForKey:kDepth];
+		if (stored != nil) {
+			const float old = [d floatForKey:kDepth];
+			[d removeObjectForKey:kDepth];
+			fprintf(stdout,
+					"openQ4 settings: schema %d -> 3 — Stereo Depth reset from "
+					"%.0f%% to the new default 100%%. Nothing else changed.\n",
+					have, old * 100.0f);
+		} else {
+			fprintf(stdout,
+					"openQ4 settings: schema %d -> 3 — Stereo Depth was not stored "
+					"(default 100%%). Nothing else changed.\n", have);
+		}
+	}
+
+	if (have < 4) {
+		/*
+		 * Step 4 (D-121, 1.1.0.4) — Stereo Depth was RESCALED: 100% used to
+		 * mean 2.5 world units and now means 1.25 (the old 50%), ceiling 200%.
+		 * A stored value is a percentage of the old unit, so keeping it would
+		 * silently halve whatever the player had chosen. Removed (the row then
+		 * reads its default, 100% = 1.25 u); nothing else is touched. Runs after
+		 * step 3, so an install coming from schema < 3 logs "not stored" here.
+		 */
+		NSString *const kDepth = @"openq4.vp3dDepth";
+		id stored = [d objectForKey:kDepth];
+		if (stored != nil) {
+			const float old = [d floatForKey:kDepth];
+			[d removeObjectForKey:kDepth];
+			fprintf(stdout,
+					"openQ4 settings: schema %d -> 4 — Stereo Depth rescaled: stored "
+					"%.0f%% (old scale, %.2f units) removed; new default 100%% = %.2f "
+					"units. Nothing else changed.\n",
+					have, old * 100.0f, old * 2.5f, OPENQ4_STEREO_SEP_AT_100);
+		} else {
+			fprintf(stdout,
+					"openQ4 settings: schema %d -> 4 — Stereo Depth was not stored "
+					"(new scale, default 100%% = %.2f units). Nothing else changed.\n",
+					have, OPENQ4_STEREO_SEP_AT_100);
+		}
 	}
 
 	[d setInteger:OPENQ4_SETTINGS_SCHEMA forKey:kStamp];

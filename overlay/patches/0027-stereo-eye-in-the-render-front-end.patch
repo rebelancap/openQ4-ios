@@ -1,6 +1,6 @@
 --- a/src/renderer/tr_main.cpp
 +++ b/src/renderer/tr_main.cpp
-@@ -942,7 +942,83 @@
+@@ -958,7 +958,83 @@
  
  static void R_GetViewFrustumExtents( float &zNear, float &xmin, float &xmax, float &ymin, float &ymax );
  
@@ -37,8 +37,8 @@
 +
 +===============================================================================
 +*/
-+idCVar r_stereo3dSeparation( "r_stereo3dSeparation", "2.5", CVAR_RENDERER | CVAR_FLOAT,
-+		"visionOS 3D: interocular distance in world units (2.5 ~ a human IPD at Quake scale)" );
++idCVar r_stereo3dSeparation( "r_stereo3dSeparation", "1.25", CVAR_RENDERER | CVAR_FLOAT,
++		"visionOS 3D: interocular distance in world units (1.25 = the shipped Stereo Depth 100%; 2.5 ~ a human IPD at Quake scale)" );
 +idCVar r_stereo3dConvergence( "r_stereo3dConvergence", "240", CVAR_RENDERER | CVAR_FLOAT,
 +		"visionOS 3D: distance in world units that sits exactly on the panel (zero parallax)" );
 +
@@ -84,7 +84,7 @@
  =================
  R_SetViewMatrix
  
-@@ -997,6 +1073,17 @@
+@@ -1013,6 +1089,17 @@
  	// convert from our coordinate system (looking down X)
  	// to OpenGL's coordinate system (looking down -Z)
  	myGlMultMatrix( viewerMatrix, s_flipMatrix, world->modelViewMatrix );
@@ -102,7 +102,7 @@
  }
  
  /*
-@@ -1069,6 +1156,24 @@
+@@ -1092,6 +1179,24 @@
  	tr.viewDef->projectionMatrix[11] = -1;
  	tr.viewDef->projectionMatrix[15] = 0;
  

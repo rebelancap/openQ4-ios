@@ -90,10 +90,20 @@ RENDERER_DEFS=(
 
 # Staged wrap subprojects for the retained UI (sync-overlay.sh, D-116).
 SUBP="$ROOT/build/ios-subprojects"
-RMLUI_DIR="$(ls -d "$SUBP"/RmlUi-*/ 2>/dev/null | head -1 || true)"; RMLUI_DIR="${RMLUI_DIR%/}"
-JSONCPP_DIR="$(ls -d "$SUBP"/jsoncpp-*/ 2>/dev/null | head -1 || true)"; JSONCPP_DIR="${JSONCPP_DIR%/}"
-TESS2_DIR="$(ls -d "$SUBP"/libtess2-*/ 2>/dev/null | head -1 || true)"; TESS2_DIR="${TESS2_DIR%/}"
-GLSLANG_DIR="$(ls -d "$SUBP"/glslang-*/ 2>/dev/null | head -1 || true)"; GLSLANG_DIR="${GLSLANG_DIR%/}"
+# Each from its pinned wrap's `directory =`, never a glob: a pin bump that moves
+# a wrap's version leaves the previous staging beside the new one, and a glob
+# picked the OLD headers for the NEW sources (D-118: jsoncpp 1.9.6 vs 1.9.8,
+# glslang 15.1.0 vs 16.6.0).
+wrapdir() { # <wrap name>
+	local d
+	d="$(sed -n 's/^directory *= *//p' "$TREE/subprojects/$1.wrap" | head -1)"
+	[ -n "$d" ] || { echo "FATAL: no directory in $TREE/subprojects/$1.wrap" >&2; exit 1; }
+	echo "$SUBP/$d"
+}
+RMLUI_DIR="$(wrapdir rmlui)"
+JSONCPP_DIR="$(wrapdir jsoncpp)"
+TESS2_DIR="$(wrapdir libtess2)"
+GLSLANG_DIR="$(wrapdir glslang)"
 for d in "$RMLUI_DIR" "$JSONCPP_DIR" "$TESS2_DIR" "$GLSLANG_DIR"; do
 	[ -d "$d" ] || { echo "FATAL: wrap subproject missing under $SUBP" >&2; exit 1; }
 done

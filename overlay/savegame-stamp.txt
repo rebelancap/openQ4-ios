@@ -27,11 +27,29 @@
 # The game sources are in-tree now, so --game-stage-root is vendor/openQ4 too
 # (exactly what upstream's meson passes), which is why the file count moved.
 #
+# v0.14.1 (D-118): new saves carry payload v5 (portable: explicit field
+# widths, wire ABI "le64-portable1", loadable by every 64-bit LE openQ4 build).
+# v3 (1.0.0) and v4 (1.0.0.1/1.1.0) payloads still load; within a version the
+# LAYOUT is read by the payload's build number (SaveGameReleases.h), and the
+# stamp below is what identifies our two shipped hash-derived build numbers to
+# overlay 0031, which reads them as builds 878 and 1574. The stamp is still
+# advisory for acceptance; the build floor is now 640. From this pin the iOS
+# build number is the real upstream commit count (UPSTREAM.pin OPENQ4_BUILD).
+#
+# v0.15.0 (D-122): payload v5 unchanged (OPENQ4_SAVEGAME_PORTABLE_VERSION 5),
+# floor 640 unchanged, layout thresholds unchanged except one new GUI revision
+# (guis/hud.gui at build 2438 -> savecompat/hud_r4.gui for older payloads). Our
+# v0.14.1 saves (build 2390, payload v5) are read by that real build number;
+# v4/v3/v2 keep 0031's mappings (1574 / 878 / 639). New saves stamp build 2636.
+# The stamp stays advisory for acceptance.
+#
 # UPDATE THIS FILE ONLY WHEN UPSTREAM.pin MOVES. Never update it to silence a
 # build failure: a dirty vendor tree or a changed generator is a bug to find.
 #
-# Pin at the time of recording: 1621aa21 (v0.14.000, game in-tree) (433 files).
-# Previous: fdd2c6015e12533ae5a49a1c7bcda21f7b9129f2739fcd3a7563dac828115eb4 (fcdd5696 + 8f411dbc, 404 files).
+# Pin at the time of recording: 0fc858e6 (v0.15.0, game in-tree) (439 files).
+# Previous: f6ae229c202f8b64f0aafcc10f0dce1b5894cd77c20b0e5d61815f98da13691c (0abaa5c4 v0.14.1, 438 files).
+# Earlier: 14c8358dc8210c421870e5a7e25cf16fc11a9f3376355a9f77fa2cd4c07154de (1621aa21 v0.14.000, 433 files).
+# Before that: fdd2c6015e12533ae5a49a1c7bcda21f7b9129f2739fcd3a7563dac828115eb4 (fcdd5696 + 8f411dbc, 404 files).
 # Before: f77698bc04082fd9ab0a38102ef17267ca6f5e6e02d54712e62c73f0593cbffe (227ee810 + 61a3c10d).
 
-14c8358dc8210c421870e5a7e25cf16fc11a9f3376355a9f77fa2cd4c07154de
+b6b3014106542033b2c565da5e9fa7e90c68299a4efb2f53630b90e0ea5edc4e

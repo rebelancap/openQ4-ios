@@ -1,6 +1,6 @@
 --- a/src/framework/Common.cpp
 +++ b/src/framework/Common.cpp
-@@ -31,6 +31,9 @@
+@@ -33,6 +33,9 @@
  
  #include "NativeInputDispatch.h"
  //#include "../renderer/Image.h"
@@ -9,8 +9,8 @@
 +#endif
  #include "../bse/BSE_API.h"
  #include "../imagetools/ImageTools.h"
- #include "../render_geo/RenderGeometry.h"
-@@ -59,6 +62,16 @@
+ #include "../rendergeo/RenderGeometry.h"
+@@ -83,6 +86,16 @@
  #define MAX_WARNING_LIST	256
  
  void openQ4_PrintFramePacingSnapshot( const char *reason );
@@ -24,10 +24,25 @@
 +extern "C" void OpenQ4_iOS_LoadProgressDone( void );
 +extern "C" void OpenQ4_iOS_BlackBox( const char *fmt, ... ) __attribute__((format(printf, 1, 2)));
 +#endif
- void openQ4_RecordMultiplayerFramePacing( int frameStartMsec );
- 
- static const int OPENQ4_ENTITYDEF_MEDIA_CACHE_TOOL_MASK =
-@@ -153,7 +166,7 @@
+ void openQ4_RecordMultiplayerFramePacing( void );
+ void Session_FinishPendingSave();
+ static void Com_ProfileFrameWork_f( const idCmdArgs &args );
+@@ -128,6 +141,14 @@
+ idCVar com_version( "si_version", version.string, CVAR_SYSTEM|CVAR_ROM|CVAR_SERVERINFO, "engine version" );
+ idCVar com_buildInfo( "com_buildInfo", buildInfo.string, CVAR_SYSTEM|CVAR_ROM, "detailed engine build information" );
+ idCVar com_skipRenderer( "com_skipRenderer", "0", CVAR_BOOL|CVAR_SYSTEM, "skip the renderer completely" );
++#if defined( __APPLE__ ) && TARGET_OS_IPHONE
++// The shell's localized message texts (ios/shell/openq4_ios_loc.m).
++extern "C" const char *OpenQ4_iOS_SaveText( int which );
++// openQ4-ios (D-123): the one-shot switch of upgraded installs to the retained
++// interface has run (see idCommonLocal::InitCommon's iOS block).
++static idCVar ios_uiRetainedMigrated( "ios_uiRetainedMigrated", "0", CVAR_INTEGER | CVAR_ARCHIVE | CVAR_SYSTEM | CVAR_NOCHEAT,
++	"openQ4-ios: 1 once this install's interface was switched to the retained one (D-123)" );
++#endif
+ idCVar com_machineSpec( "com_machineSpec", "-1", CVAR_INTEGER | CVAR_ARCHIVE | CVAR_SYSTEM, "hardware classification, -1 = not detected, 0 = low quality, 1 = medium quality, 2 = high quality, 3 = ultra quality" );
+ const char *com_performancePresetArgs[] = { "minimum", "lowpower", "low", "performance", "balanced", "enhanced", "quality", "ultra", "maximum", NULL };
+ static const char *com_performancePresetValueStrings[] = { "balanced", "minimum", "lowpower", "low", "performance", "enhanced", "quality", "ultra", "maximum", NULL };
+@@ -182,7 +203,7 @@
  idCVar com_videoRam( "com_videoRam", "64", CVAR_INTEGER | CVAR_SYSTEM | CVAR_NOCHEAT | CVAR_ARCHIVE, "holds the last amount of detected video ram" );
  idCVar com_activeGameModule( "com_activeGameModule", "", CVAR_SYSTEM | CVAR_NOCHEAT, "active game module (game_sp/game_mp)" );
  idCVar com_nextGameModule( "com_nextGameModule", "", CVAR_SYSTEM | CVAR_NOCHEAT, "internal one-shot game module override for reloadEngine" );
@@ -36,7 +51,7 @@
  
  static bool openQ4_IsValidGameModuleName( const char *moduleName );
  
-@@ -476,6 +489,15 @@
+@@ -771,6 +792,15 @@
  static bool commonLoadingContinueInputActive = false;
  
  void openQ4_SetLoadingContinueInputActive( bool active ) {
@@ -52,7 +67,7 @@
  	commonLoadingContinueInputActive = active;
  }
  
-@@ -911,7 +933,17 @@
+@@ -1207,7 +1237,17 @@
  	if ( sanitized.Length() == 0 || sanitized.Icmp( "default" ) == 0 ) {
  		return "";
  	}
@@ -71,7 +86,31 @@
  		return "";
  	}
  
-@@ -1140,6 +1172,16 @@
+@@ -1402,6 +1442,23 @@
+ 	return com_mainThreadId == std::thread::id() || std::this_thread::get_id() == com_mainThreadId;
+ }
+ 
++#if defined( __APPLE__ ) && TARGET_OS_IPHONE
++/*
++ * openQ4-ios (D-118). The shell runs common->Init on the MAIN thread (SDL's
++ * UIKit video init is main-thread-only) and every frame after it on a 16 MB
++ * engine thread (iOS gives main 1 MB; map loading needs more, and a blocked
++ * main thread is a watchdog kill). v0.14.1 records the thread that ran Init as
++ * the engine's main thread and queues any print made elsewhere until that
++ * thread flushes it, so after the hand-off nothing printed at all. The engine
++ * thread adopts the identity once, before its first frame, together with the
++ * filesystem, event-disposition, retained-UI and GUI-manager owners
++ * (OpenQ4_iOS_AdoptEngineThreadIdentity, below).
++ */
++static void Common_iOS_AdoptMainThread( void ) {
++	com_mainThreadId = std::this_thread::get_id();
++}
++#endif
++
+ static bool Common_QueueOffMainThread( bool warning, const char *text ) {
+ 	if ( Common_OnMainThread() ) {
+ 		return false;
+@@ -1503,6 +1560,16 @@
  		return;
  	}
  
@@ -88,7 +127,7 @@
  	// echo to console buffer
  	console->Print( msg );
  
-@@ -1256,6 +1298,13 @@
+@@ -1638,6 +1705,13 @@
  	va_start( argptr, fmt );
  	VPrintf( fmt, argptr );
  	va_end( argptr );
@@ -102,7 +141,7 @@
  }
  
  /*
-@@ -1451,6 +1500,20 @@
+@@ -1857,6 +1931,20 @@
  ==================
  */
  void idCommonLocal::Error( const char *fmt, ... ) {
@@ -123,7 +162,7 @@
  	va_list		argptr;
  	static int	lastErrorTime;
  	static int	errorCount;
-@@ -1578,6 +1641,16 @@
+@@ -2012,6 +2100,16 @@
  ==================
  */
  void idCommonLocal::FatalError( const char *fmt, ... ) {
@@ -140,13 +179,71 @@
  	va_list		argptr;
  
  	// if we got a recursive error, make it fatal
-@@ -4330,8 +4403,51 @@
+@@ -2106,6 +2204,17 @@
+ 			idAsyncNetwork::server.Kill();
+ 			WriteConfiguration();
+ 		}
++#if defined( __APPLE__ ) && TARGET_OS_IPHONE
++		// iOS/visionOS: the engine runs on its own thread, and Shutdown() tears
++		// the UIKit window down from it -- a main-thread violation that UIKit
++		// traps (SIGTRAP in -[UIWindow _setHidden:forced:]), so the menu's Exit
++		// and the console's quit ended in a crash report. The process is leaving:
++		// flush the configuration and exit without the teardown, as a swipe-kill
++		// does.
++		WriteConfiguration();
++		Sys_Quit();
++		return;
++#endif
+ 		Shutdown();
  	}
+ 
+@@ -3445,6 +3554,12 @@
+  signals.arm64=Common_HostCpuIsArm64();
+ #if defined( __ANDROID__ )
+  signals.mobile=true;
++#elif defined( __APPLE__ ) && TARGET_OS_IPHONE
++ // openQ4-ios: iPhone, iPad and Vision Pro are battery- and thermally-limited
++ // devices with shared memory, exactly what the mobile signal describes; it
++ // replaces the "clamp the tier to 2" rule earlier pins needed because the
++ // 2005-era detection rated every phone Ultra (D-118).
++ signals.mobile=true;
+ #elif defined( __linux__ )
+  signals.linuxHost=true;
+ #endif
+@@ -3745,8 +3860,22 @@
+ 	if ( UI_SettingsStartupActive() || UI_SettingsRecoveryPending() ) {
+ 		return false;
+ 	}
+-	return idStr::Cmp( com_performancePresetCheck.GetString(), openq4::PerformancePresetSystemVersion().c_str() ) != 0;
++	const bool due = idStr::Cmp( com_performancePresetCheck.GetString(), openq4::PerformancePresetSystemVersion().c_str() ) != 0;
++#if defined( __APPLE__ ) && TARGET_OS_IPHONE
++	// openQ4-ios D-122: no "SYSTEM CHECK" screen on iPhone/iPad/Vision Pro. It is
++	// worded for a PC, sits in front of the main menu, and its "recommended"
++	// answer is the mobile tier upstream detects for every Apple device; on iOS
++	// the preset is chosen in the app's own Settings sheet. A due check (v0.15.0
++	// bumped the preset system version, so every existing install is due once)
++	// is answered "keep current": nothing a player set changes.
++	if ( due ) {
++		Common_RecordPerformancePresetCheck( "iOS: kept the current preset without asking; Settings chooses it" );
++	}
++	return false;
++#else
++	return due;
+ #endif
++#endif
  }
  
+ bool Common_DescribePerformancePresetCheck( openq4::PerformancePresetCheck &check, std::string &error ) {
+@@ -5036,8 +5165,51 @@
+ 		common->Printf( "IPv6 network self-test: passed\n" );
+ 	} else {
+ 		common->Printf( "IPv6 network self-test: FAILED\n" );
++	}
++}
++
 +#if defined( OPENQ4_VISIONOS_3D )
- /*
- =================
++/*
++=================
 +Com_DeferTeardownWhile3D
 +
 +openQ4-visionOS (D-114). A game-module swap or engine reload destroys and
@@ -172,7 +269,7 @@
 +	if ( !OpenQ4_Vision3D_HoldRendererTeardown() ) {
 +		com_teardownWait3DStart = 0;
 +		return false;
-+	}
+ 	}
 +	const int now = Sys_Milliseconds();
 +	if ( com_teardownWait3DStart == 0 ) {
 +		com_teardownWait3DStart = now;
@@ -184,43 +281,56 @@
 +	}
 +	cmdSystem->BufferCommandText( CMD_EXEC_APPEND, va( "wait\n%s\n", command ) );
 +	return true;
-+}
+ }
 +#endif
-+
-+/*
-+=================
- Com_ReloadEngine_f
- =================
- */
-@@ -4344,7 +4460,13 @@
  
- 	if ( args.Argc() > 1 && idStr::Icmp( args.Argv( 1 ), "menu" ) == 0 ) {
+ /*
+ =================
+@@ -5055,6 +5227,27 @@
  		menu = true;
-+	}
-+
+ 	}
+ 
 +#if defined( OPENQ4_VISIONOS_3D )
 +	if ( Com_DeferTeardownWhile3D( menu ? "reloadEngine menu" : "reloadEngine" ) ) {
 +		return;
- 	}
++	}
 +#endif
- 
++
++#if defined( __APPLE__ ) && TARGET_OS_IPHONE
++	// openQ4-ios (D-123, Q-040): an in-place engine reload rebuilds the window
++	// from the engine thread, which UIKit traps (BSServiceMainRunLoopQueue
++	// assertBarrierOnQueue) — the in-game Mods > Load and the renderer restart
++	// in Settings both crashed the app (D-118, also in 1.1.0). Say what to do
++	// instead of reloading: mods load from the gear's Mods page at the next
++	// launch, and a renderer setting applies when the app is opened again.
++	common->Printf( "iOS: reloadEngine%s refused (an in-place engine reload is not possible on iOS); told the player\n",
++		menu ? " menu" : "" );
++	if ( session != NULL ) {
++		session->MessageBox( MSG_OK, OpenQ4_iOS_SaveText( 11 ), OpenQ4_iOS_SaveText( 12 ), false );
++	}
++	return;
++#endif
++
  	common->Printf( "============= ReloadEngine start =============\n" );
  	fileSystem->SetIsFileLoadingAllowed( true );
-@@ -4393,6 +4515,13 @@
+ 	if ( !menu ) {
+@@ -5233,8 +5426,15 @@
+ 	if ( !openQ4_IsValidGameModuleName( requestedModule.c_str() ) ) {
+ 		common->Printf( "reloadGameModule requested without a valid com_nextGameModule; falling back to reloadEngine\n" );
  		Com_ReloadEngine_f( args );
- 		return;
- 	}
++		return;
++	}
 +#if defined( OPENQ4_VISIONOS_3D )
 +	// postReload (what runs after the swap) stays parked in the command
 +	// system until the re-queued reloadGameModule actually swaps.
 +	if ( Com_DeferTeardownWhile3D( "reloadGameModule" ) ) {
-+		return;
-+	}
+ 		return;
+ 	}
 +#endif
  	const idStr previousModule = cvarSystem->GetCVarString( "com_activeGameModule" );
  
  	common->Printf( "============= ReloadGameModule start =============\n" );
-@@ -6720,6 +6849,16 @@
+@@ -7841,6 +8041,16 @@
  		return;
  	}
  
@@ -237,31 +347,17 @@
  	if ( Common_IsEnvFlagTrue( Common_GetNonEmptyEnv( "OPENQ4_DISABLE_STEAMDECK_AUTODETECT" ) ) ||
  		 Common_IsEnvFlagTrue( Common_GetNonEmptyEnv( "OPENQ4_NO_STEAMDECK_AUTODETECT" ) ) ) {
  		Printf( "Steam Deck platform profile auto-detection disabled by environment.\n" );
-@@ -6850,7 +6989,22 @@
- 		Sys_FormatMemoryMB( vidRam ).c_str(),
- 		( oldCard ) ? "a less than optimal video architecture" : "an optimal video architecture" );
- 
--	const int machineSpec = Common_DetectMachineSpec( ghz, vidRam, sysRam, oldCard );
-+	int machineSpec = Common_DetectMachineSpec( ghz, vidRam, sysRam, oldCard );
+@@ -7876,6 +8086,9 @@
+ 		signals.explicitLowPower = Common_HasExplicitLowPowerHostSignal();
+ 		signals.raspberryPi = Common_HasRaspberryPiHostSignal();
+ 		signals.steamDeck = idStr::Icmp( com_platformProfile.GetString(), "steamdeck" ) == 0 || Common_HasSteamDeckHostSignal();
 +#if defined( __APPLE__ ) && TARGET_OS_IPHONE
-+	// The tier thresholds are 2005-era (300 MB of VRAM qualifies for Ultra), so
-+	// every modern device clears them by orders of magnitude. On a desktop that
-+	// is harmless. On a phone Ultra loads maximum-resolution textures until
-+	// Jetsam kills the process, so the tier is clamped to "high" here regardless
-+	// of what the hardware reports.
-+	//
-+	// This is a memory-budget decision, not a performance one: an A19 Pro can
-+	// draw the frame, it just cannot hold the whole Ultra texture set inside an
-+	// app memory allowance.
-+	if ( machineSpec > 2 ) {
-+		common->Printf( "iOS: clamping quality tier %d -> 2 (app memory budget)\n", machineSpec );
-+		machineSpec = 2;
-+	}
++		signals.mobile = true;	// as in Common_CapturePerformancePresetSignals (D-118)
 +#endif
- 	Printf( "%s", Common_MachineSpecQualificationMessage( machineSpec ) );
- 	com_machineSpec.SetInteger( machineSpec );
- 	com_videoRam.SetInteger( vidRam );
-@@ -6918,11 +7072,19 @@
+ 	}
+ 	const auto detected = openq4::DetectPerformancePreset( signals );
+ 	com_machineSpec.SetInteger( detected.preset->machineSpec );
+@@ -7947,10 +8160,18 @@
  
  #ifndef ID_DEDICATED
  		// The splash must respect launch settings before creating any visible window.
@@ -276,17 +372,53 @@
  			!idAsyncNetwork::serverDedicated.GetInteger() && !cvarSystem->GetCVarBool( "win_viewlog" ) ) {
  			Sys_ShowSplash();
  		}
- #endif
 +#endif
+ #endif
  
  		if ( !idAsyncNetwork::serverDedicated.GetInteger() && Sys_AlreadyRunning() ) {
- 			Sys_Quit();
-@@ -7219,8 +7381,35 @@
- 		SetMachineSpec();
- 		Com_ExecMachineSpec_f( args );
- 		repairedUnsetMachineSpec = true;
+@@ -8267,6 +8488,38 @@
+ 		cvarSystem->SetCVarString( "sys_lang", savedLanguage.c_str() );
+ 	}
+ 
++#if defined( __APPLE__ ) && TARGET_OS_IPHONE
++	// openQ4-ios (D-123): the retained interface is the default again, as
++	// upstream has it. 1.1.0.1-1.1.0.4 forced the classic one (D-118: its
++	// main menu drew nothing under the engine-thread hand-off, fixed by 0034),
++	// so every upgraded install has `seta ui_retained "0"` archived without
++	// the player ever choosing it. Switch those installs once, logged, and
++	// remember that it was done (ios_uiRetainedMigrated, archived): a player
++	// who picks the classic interface afterwards keeps it. Fresh installs
++	// start on upstream's default and are only stamped. After every config
++	// file and before the command line, so `+set ui_retained 0` still wins.
++	if ( ios_uiRetainedMigrated.GetInteger() < 1 ) {
++		const bool wasRetained = cvarSystem->GetCVarBool( "ui_retained" );
++		if ( !wasRetained ) {
++			cvarSystem->SetCVarBool( "ui_retained", true );
++		}
++		ios_uiRetainedMigrated.SetInteger( 1 );
++		Printf( "iOS: interface migration 1 — ui_retained %s (the classic interface stays one setting away)\n",
++				wasRetained ? "already 1, kept" : "0 -> 1, the new interface (was forced classic by 1.1.0.1-1.1.0.4)" );
++		// The weapon wheel moves to the middle (openq4_profile_ios.cfg), out from
++		// under the touch buttons; a stored 27 is upstream's untouched default.
++		if ( cvarSystem->GetCVarInteger( "ui_weaponWheelOffset" ) == 27 ) {
++			cvarSystem->SetCVarInteger( "ui_weaponWheelOffset", 0 );
++			Printf( "iOS: interface migration 1 — ui_weaponWheelOffset 27 -> 0 (centred, clear of the touch buttons)\n" );
++		}
 +	}
++	// A touch screen until a mouse or trackpad says otherwise: the retained
++	// menus draw their mouse arrow while the last pointer was not a finger, and
++	// before any input that left an arrow parked in the top-left corner of the
++	// first menu (D-123). A real mouse moving brings the arrow back.
++	idKeyInput::NotePointerSource( true );
++#endif
 +
+ 	// re-override anything from the config files with command line args
+ 	StartupVariable( NULL, false );
+ 	startupPresetCapture.End();
+@@ -8298,6 +8551,33 @@
+ 		repairedUnsetMachineSpec = true;
+ 	}
+ 
 +#if defined( __APPLE__ ) && TARGET_OS_IPHONE
 +	// Clamp AFTER the config has been read, not only at detection time.
 +	// com_machineSpec is CVAR_ARCHIVE, so a device that once detected Ultra
@@ -299,8 +431,8 @@
 +				com_machineSpec.GetInteger() );
 +		com_machineSpec.SetInteger( 2 );
 +		Com_ExecMachineSpec_f( args );
- 	}
- 
++	}
++
 +	// Same archived-value trap as the quality tier, and for the same reason: the
 +	// platform profile sets this but is exec'd BEFORE the saved config, so an
 +	// install that once wrote 6 keeps it forever. A phone has two speakers;
@@ -317,3 +449,25 @@
  	Common_MigrateLegacyConsoleAllowCVar();
  
  	// Unconditional, because the "This system qualifies for ..." banner above
+@@ -8519,3 +8799,21 @@
+ 	// shut down the file system
+ 	fileSystem->Shutdown( reloading );
+ }
++
++#if defined( __APPLE__ ) && TARGET_OS_IPHONE
++// openQ4-ios (D-118): see Common_iOS_AdoptMainThread. Each owner is rebound on
++// the calling thread; called once by the shell from the engine thread before
++// its first frame, while the main thread is parked outside the engine.
++void FileSystem_iOS_AdoptMainThread( void );
++void Sys_iOS_AdoptEventDispositionThread( void );
++void RetainedUI_iOS_AdoptEditThread( void );
++void UI_iOS_AdoptNativePresenceThread( void );
++extern "C" void OpenQ4_iOS_AdoptEngineThreadIdentity( void ) {
++	Common_iOS_AdoptMainThread();
++	FileSystem_iOS_AdoptMainThread();
++	Sys_iOS_AdoptEventDispositionThread();
++	RetainedUI_iOS_AdoptEditThread();
++	UI_iOS_AdoptNativePresenceThread();
++	common->Printf( "iOS: engine thread adopted the main-thread identity (prints, filesystem, events, UI)\n" );
++}
++#endif

@@ -46,7 +46,7 @@ MODULES="$MODDIR"
 mkdir -p "$APP/baseoq4" "$APP/Frameworks"
 
 echo "==> staging baseoq4 runtime packs"
-for f in pak0.pk4 pak1.pk4 mod.json; do
+for f in $(openq4_pak_names) mod.json; do
 	[ -f "$ORACLE_PAKS/$f" ] || { echo "FATAL: missing $ORACLE_PAKS/$f" >&2; exit 1; }
 	# -c: skip the copy when content already matches, so repeated builds do not
 	# re-write 560 MB every time.
@@ -70,16 +70,19 @@ python3 "$ROOT/scripts/gen-ios-demo-menu-gui.py" \
 	"$ROOT/vendor/openQ4/content/baseoq4/pak0/guis/demo_menu.gui" \
 	"$APP/baseoq4/guis/demo_menu.gui"
 
-echo "==> staging the legacy HUD shapes for older saves"
-# D-116: the 1.0.0-era (openQ4 v0.13.2, save payload v3) guis/hud.gui and
-# guis/hud_strogg.gui, read only while restoring a payload-v3 save so its HUD
-# blobs parse against the tree that wrote them (UserInterface.cpp legacy GUI
-# shapes). Loose, beside the paks, for the same MD5 reason as the demo menu; a
-# path no stock file uses, so they never override anything. Provenance:
-# ios/baseoq4/guis/savecompat/README.md.
+echo "==> staging the retained-UI page fixes (D-123)"
+# Loose overrides again, for upstream retained documents that need a fix on
+# touch (scripts/gen-ios-retained-overrides.py says which and why).
+rm -rf "$APP/baseoq4/guis/menu"
+python3 "$ROOT/scripts/gen-ios-retained-overrides.py" \
+	"$ROOT/vendor/openQ4/content/baseoq4/pak0" \
+	"$APP/baseoq4"
+
+# D-116 shipped v0.13.2's hud.gui / hud_strogg.gui loose at
+# baseoq4/guis/savecompat/payload3/ for overlay 0030. D-118 retired both: v0.14.1
+# reads older GUI records through its own revisions in pak0 (guis/savecompat/).
+# Removed here so an incrementally rebuilt app cannot keep the stale copies.
 rm -rf "$APP/baseoq4/guis/savecompat"
-mkdir -p "$APP/baseoq4/guis/savecompat"
-cp -R "$ROOT/ios/baseoq4/guis/savecompat/payload3" "$APP/baseoq4/guis/savecompat/"
 
 echo "==> staging game modules"
 ls "$MODULES"/*.dylib >/dev/null 2>&1 || { echo "FATAL: no game modules in $MODULES" >&2; exit 1; }
@@ -102,12 +105,10 @@ cp "$ROOT/NOTICE.md" "$APP/licenses/NOTICE.md"
 # Assert, rather than trust the copies above. This is the check whose absence
 # let a missing profile ship repeatedly.
 for required in \
-	"$APP/baseoq4/pak0.pk4" \
-	"$APP/baseoq4/pak1.pk4" \
 	"$APP/baseoq4/openq4_profile_ios.cfg" \
 	"$APP/baseoq4/guis/demo_menu.gui" \
-	"$APP/baseoq4/guis/savecompat/payload3/hud.gui" \
-	"$APP/baseoq4/guis/savecompat/payload3/hud_strogg.gui" \
+	"$APP/baseoq4/guis/menu/campaign_skill.rui" \
+	"$APP/baseoq4/guis/menu/chapters.rui" \
 	"$APP/Frameworks/game-sp_arm64.dylib" \
 	"$APP/Frameworks/game-mp_arm64.dylib" \
 	"$APP/licenses/LICENSE" \
@@ -121,5 +122,8 @@ for required in \
 	"$APP/licenses/glslang/LICENSE.txt"
 do
 	[ -f "$required" ] || { echo "FATAL: not staged: $required" >&2; exit 1; }
+done
+for f in $(openq4_pak_names); do
+	[ -f "$APP/baseoq4/$f" ] || { echo "FATAL: not staged: $APP/baseoq4/$f" >&2; exit 1; }
 done
 echo "==> bundle content staged and verified"

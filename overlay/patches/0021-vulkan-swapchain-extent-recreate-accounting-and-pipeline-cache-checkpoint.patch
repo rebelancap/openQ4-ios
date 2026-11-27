@@ -1,6 +1,6 @@
 --- a/src/renderer/Vulkan/VulkanDevice.cpp
 +++ b/src/renderer/Vulkan/VulkanDevice.cpp
-@@ -759,18 +759,41 @@
+@@ -1056,18 +1056,41 @@
  		if ( R_IsRecoverableRendererRestart() || !vkCtx.strictSwapInterval ) return false;
  		common->Warning( "Vulkan: swap interval %d is not available on this surface; presenting with vertical sync until it is", requestedInterval );
  		presentMode = VK_PRESENT_MODE_FIFO_KHR;
@@ -48,7 +48,7 @@
  	}
  	if ( extent.width < caps.minImageExtent.width ) {
  		extent.width = caps.minImageExtent.width;
-@@ -783,7 +806,19 @@
+@@ -1080,7 +1103,19 @@
  	}
  	if ( caps.maxImageExtent.height > 0 && extent.height > caps.maxImageExtent.height ) {
  		extent.height = caps.maxImageExtent.height;
@@ -68,7 +68,7 @@
  	if ( extent.width == 0 || extent.height == 0 ) {
  		// minimized window; keep the old swapchain until a real size shows up
  		vkCtx.surfaceExtentZero = true;
-@@ -1161,15 +1196,135 @@
+@@ -1479,9 +1514,30 @@
  		|| caps.currentExtent.height != vkCtx.swapchainExtent.height;
  }
  
@@ -99,6 +99,11 @@
 +    never suppressed: it means the old swapchain cannot be presented at all.
  ====================
  */
+ // The worker may discover out-of-date/surface-loss during acquire or present.
+@@ -1490,7 +1546,88 @@
+ // the main thread collects it, never by waiting back on that thread.
+ static bool vkThreadedRecreatePending = false;
+ 
 -bool VK_Device_RecreateSwapchain( void ) {
 +#define VK_RECREATE_THRASH_WINDOW_FRAMES	60
 +#define VK_RECREATE_THRASH_WINDOW_LIMIT		3
@@ -182,6 +187,10 @@
 +====================
 +*/
 +bool VK_Device_RecreateSwapchainForReason( vkRecreateReason_t reason ) {
+ 	R_RenderThread_Sync( "device" );
+ 	if ( R_RenderThread_OnRenderThread() ) {
+ 		vkThreadedRecreatePending = true;
+@@ -1499,6 +1636,24 @@
  	if ( !vkCtx.initialized || vkCtx.presentationBlocked ) {
  		return false;
  	}
@@ -206,7 +215,7 @@
  	if ( vkCtx.surfaceLost ) {
  		return VK_Device_RecoverSurface();
  	}
-@@ -1195,9 +1350,35 @@
+@@ -1524,9 +1679,35 @@
  	if ( waited != VK_SUCCESS ) { VK_Device_BlockPresentation( RDP_WAIT_FAILED, waited, "swapchain idle wait" ); return false; }
  	R_RendererMetrics_ResetGpuFrameTiming( "Vulkan swapchain recreation" );
  	if ( !VK_Device_CreateSwapchain() ) return false;
@@ -242,20 +251,20 @@
  /*
  ====================
  VK_Device_RecoverSurface
-@@ -1304,6 +1485,7 @@
- bool VK_Device_Init( const renderWindowServices_s *windowServices ) {
+@@ -1660,6 +1841,7 @@
+ 		vkDeviceAttempt_t &attempt ) {
  	renderDisplayChangeScope_t presentation( RDP_INIT_FAILED );
  	memset( &vkCtx, 0, sizeof( vkCtx ) );
 +	memset( &vkRecreate, 0, sizeof( vkRecreate ) );
+ 	memset( &attempt, 0, sizeof( attempt ) );
  	vkWindowServices = windowServices;
  
- 	if ( windowServices == NULL || windowServices->CreateVulkanSurface == NULL
 --- a/src/renderer/Vulkan/VulkanDevice.h
 +++ b/src/renderer/Vulkan/VulkanDevice.h
-@@ -215,9 +215,25 @@
- // failure so the loader's fail-closed ladder stays reachable.
- bool	VK_Device_Init( const renderWindowServices_s *windowServices );
- void	VK_Device_Shutdown( void );
+@@ -280,9 +280,25 @@
+ // Startup only: tears down an adapter that failed after admission without
+ // writing its pipeline cache, so the next candidate starts from a clean slate.
+ void	VK_Device_AbandonAdapter( void );
 +
 +// Why a swapchain recreate happened. A recreate costs a vkDeviceWaitIdle, so
 +// one per frame is a stall the frame timers cannot see and no counter shipped
@@ -278,7 +287,7 @@
  bool	VK_Device_RecreateSwapchain( void );
  // VK_ERROR_SURFACE_LOST_KHR: rebuild the surface and swapchain in place;
  // latches presentation when the window can no longer provide a surface.
-@@ -230,6 +246,14 @@
+@@ -295,6 +311,14 @@
  int		VK_Device_RequestedSwapInterval( void );
  void	VK_Device_BlockPresentation( renderDisplayOutcome_t outcome, VkResult error, const char *operation );
  

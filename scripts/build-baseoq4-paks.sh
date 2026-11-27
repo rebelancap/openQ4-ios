@@ -46,8 +46,15 @@ if [ -n "$(git -C "$VENDOR" status --porcelain --untracked-files=no -- content)"
 	exit 1
 fi
 
+# Every pack upstream's table lists (pak0 core, pak1 light grids, pak2
+# loadscreens since v0.14.1, D-118).
+. "$ROOT/scripts/paks.sh"
+PAK_NAMES="$(openq4_pak_names)"
+[ -n "$PAK_NAMES" ] || { echo "FATAL: no packs in content_packs.json" >&2; exit 1; }
+all_paks_present() { local f; for f in $PAK_NAMES; do [ -f "$OUT/$f" ] || return 1; done; }
+
 if [ "$FORCE" = 0 ] && [ -f "$STAMP" ] && [ "$(cat "$STAMP")" = "$PIN_COMMIT" ] \
-	&& [ -f "$OUT/pak0.pk4" ] && [ -f "$OUT/pak1.pk4" ] && [ -f "$OUT/mod.json" ]; then
+	&& [ -f "$OUT/mod.json" ] && all_paks_present; then
 	echo "==> baseoq4 packs already built for pin ${PIN_COMMIT:0:8} ($OUT)"
 	exit 0
 fi
@@ -56,7 +63,8 @@ mkdir -p "$OUT"
 rm -f "$STAMP"
 export PYTHONDONTWRITEBYTECODE=1   # keep __pycache__ out of vendor/
 
-for pak in pak0 pak1; do
+for pakfile in $PAK_NAMES; do
+	pak="${pakfile%.pk4}"
 	echo "==> building $pak.pk4"
 	python3 "$TOOLS/write_pak_manifest.py" "$VENDOR" "$pak.pk4" "content/baseoq4/$pak" "$OUT/.$pak.sources" \
 		|| { echo "FATAL: $pak source manifest failed" >&2; exit 1; }
@@ -64,6 +72,7 @@ for pak in pak0 pak1; do
 		--source-dir "$VENDOR/content/baseoq4/$pak" \
 		--manifest "$OUT/.$pak.sources" \
 		--out "$OUT/$pak.pk4" \
+		--source-root "$VENDOR" \
 		|| { echo "FATAL: $pak.pk4 build failed" >&2; exit 1; }
 	[ -s "$OUT/$pak.pk4" ] || { echo "FATAL: $pak.pk4 is empty or missing" >&2; exit 1; }
 done
@@ -80,6 +89,6 @@ sed "s/@OPENQ4_VERSION_BASE@/$BASE_VERSION/g" "$VENDOR/content/baseoq4/mod.json.
 echo "$PIN_COMMIT" > "$STAMP"
 echo
 echo "PAKS OK (pin ${PIN_COMMIT:0:8}, base version $BASE_VERSION)"
-ls -l "$OUT"/pak0.pk4 "$OUT"/pak1.pk4 "$OUT"/mod.json | awk '{print "  " $5 "\t" $9}'
-md5 -q "$OUT/pak0.pk4" | sed 's/^/  pak0 md5 /'
-md5 -q "$OUT/pak1.pk4" | sed 's/^/  pak1 md5 /'
+for pakfile in $PAK_NAMES; do
+	printf '  %s\t%s\tmd5 %s\n' "$(stat -f %z "$OUT/$pakfile")" "$pakfile" "$(md5 -q "$OUT/$pakfile")"
+done

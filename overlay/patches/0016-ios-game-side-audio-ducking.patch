@@ -11,9 +11,9 @@
 +#endif
 +#endif
  #include "snd_local.h"
- 
- idCVar s_singleEmitter( "s_singleEmitter", "0", CVAR_INTEGER, "mute all sounds but this emitter" );
-@@ -699,6 +705,16 @@
+ #include "SoundDialogue.h"
+ #include "../framework/declLipSync.h"
+@@ -977,6 +983,16 @@
  
  	volumeScale = SoundSanitizeGainScale( volumeScale, 0.0f );
  	volumeScale = SoundSanitizeGainScale( volumeScale * SoundSanitizeGainScale( s_volume.GetFloat(), 0.0f ), 0.0f );

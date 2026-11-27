@@ -1,0 +1,51 @@
+--- a/src/mpgame/MultiplayerGame.cpp
++++ b/src/mpgame/MultiplayerGame.cpp
+@@ -10335,6 +10335,15 @@
+ 	memset( casualCaster, 0, sizeof( casualCaster ) );
+ 	memset( spectatorChatNoticeTime, 0, sizeof( spectatorChatNoticeTime ) );
+ 	retainedMenuCovered = false;
++	// openQ4-ios (D-123): the published retained-menu values are pooled
++	// strings. idLib::ShutDown frees the pools with the game; a module that
++	// stays mapped across a game reload (iOS never unloads a signed framework)
++	// would keep this dict's stale pointers and free them again on the next
++	// SetRetainedMenuCover (EXC_BAD_ACCESS in idStrPool::FreeString, second
++	// spawnServer of a session). Empty it with everything else here.
++	retainedMenuPublished.Clear();
++	// Same reason: the buying manager's cached constants decls.
++	mpBuyingManager.ForgetConstants();
+ 	retainedStatClient = -1;
+ 	retainedStatIdentity.Clear();
+ 	for ( int list = 0; list < RETAINED_PLAYER_LISTS; list++ ) {
+--- a/src/mpgame/mp/Buying.cpp
++++ b/src/mpgame/mp/Buying.cpp
+@@ -218,6 +218,14 @@
+ 	opponentKillRules( -1 ) { }
+ 
+ riBuyingManager::~riBuyingManager() { }
++
++void riBuyingManager::ForgetConstants( void ) {
++	_buyingGameBalanceConstants = NULL;
++	_itemCostConstants = NULL;
++	opponentKillCashAward = 0;
++	opponentKillFragCount = -1;
++	opponentKillRules = -1;
++}
+ 
+ /*
+ ==============
+--- a/src/mpgame/mp/Buying.h
++++ b/src/mpgame/mp/Buying.h
+@@ -101,6 +101,13 @@
+ 	riBuyingManager();
+ 	~riBuyingManager();
+ 
++	// openQ4-ios (D-123): forget the cached constants decls (and the kill-award
++	// latch) when the game shuts down. On iOS the game module stays mapped
++	// across a reload, so this object is not rebuilt and its decl pointers
++	// would outlive the decl manager's purge (EXC_BAD_ACCESS in
++	// idDict::FindKey from GetItemPrice on the next buying match).
++	void					ForgetConstants( void );
++
+ 	// the rules the server sells by
+ 	int						GetRules( void ) const;
+ 

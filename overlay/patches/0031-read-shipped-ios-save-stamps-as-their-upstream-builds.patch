@@ -1,0 +1,85 @@
+--- a/src/framework/SaveGameReleases.h
++++ b/src/framework/SaveGameReleases.h
+@@ -101,11 +101,82 @@
+ release checkout stamped it, otherwise the build it carries.
+ ====================
+ */
++/*
++	openQ4-ios (D-118). The iOS/visionOS port compiles from a tree that is not a
++	git checkout, so until v0.14.1 it stamped a build number derived from its
++	upstream pin (a hash, far above any real build) instead of the commit count
++	a full checkout stamps. Read as a layout build, that number claims every
++	field and GUI revision added after the pin, and the restore desyncs. Each
++	shipped pin is recognised here by its exact stamp and read as the commit
++	count of the upstream tag it was built from. From v0.14.1 the port stamps
++	the real commit count itself (UPSTREAM.pin OPENQ4_BUILD), so this table
++	never grows.
++*/
++static const openQ4SaveGameRelease_t OPENQ4_SAVEGAME_IOS_PIN_STAMPS[] = {
++	// openQ4-ios 1.0.0 (payload v3): upstream v0.13.2 fcdd5696 + openQ4-game 8f411dbc
++	{ "ios-1.0.0",	"fdd2c6015e12533ae5a49a1c7bcda21f7b9129f2739fcd3a7563dac828115eb4", 404, 878 },
++	// openQ4-ios 1.0.0.1 and 1.1.0 (payload v4): upstream v0.14.000 1621aa21
++	{ "ios-1.1.0",	"14c8358dc8210c421870e5a7e25cf16fc11a9f3376355a9f77fa2cd4c07154de", 433, 1574 },
++};
++static const int OPENQ4_SAVEGAME_IOS_PIN_STAMP_BUILDS[] = { 28284, 41192 };
++
++static inline const openQ4SaveGameRelease_t *OpenQ4_FindSaveGameIosPinStamp( int savedBuild, const char *sourceHash, int sourceFileCount ) {
++	if ( sourceHash == NULL ) {
++		return NULL;
++	}
++	for ( int i = 0; i < static_cast<int>( sizeof( OPENQ4_SAVEGAME_IOS_PIN_STAMPS ) / sizeof( OPENQ4_SAVEGAME_IOS_PIN_STAMPS[0] ) ); i++ ) {
++		const openQ4SaveGameRelease_t &stamp = OPENQ4_SAVEGAME_IOS_PIN_STAMPS[i];
++		if ( savedBuild == OPENQ4_SAVEGAME_IOS_PIN_STAMP_BUILDS[i] && stamp.sourceFileCount == sourceFileCount
++				&& idStr::Icmp( stamp.sourceHash, sourceHash ) == 0 ) {
++			return &stamp;
++		}
++	}
++	return NULL;
++}
++
++/*
++	openQ4-ios (D-119). Before 1.0.0 the port's development builds (0.1.0.x,
++	August to October 2026) were pinned to upstream 227ee810 + openQ4-game
++	61a3c10d and wrote payload v2. That commit is upstream build 639, the last
++	v2 build, which upstream still restores; it reads v2 only as the Windows x64
++	raw layout because v2 carried no wire-ABI stamp and Windows was the only
++	platform that shipped one. The port's v2 saves are the raw layout of the
++	Apple arm64 build that wrote them — the same native layout this build reads
++	its v3/v4 saves in. They are recognised by the pin's pristine source stamp
++	and a build number no upstream checkout of that commit stamps (a full one
++	stamps 639, a shallow one 1; the port stamped a hash of the pin, or before
++	D-066 the port repository's own commit count).
++*/
++static const char *OPENQ4_SAVEGAME_IOS_V2_SOURCE_HASH = "f77698bc04082fd9ab0a38102ef17267ca6f5e6e02d54712e62c73f0593cbffe";
++static const int OPENQ4_SAVEGAME_IOS_V2_SOURCE_FILE_COUNT = 404;
++static const int OPENQ4_SAVEGAME_IOS_V2_LAYOUT_BUILD = 639;
++
++static inline bool OpenQ4_IsSaveGameIosV2Stamp( int version, int savedBuild, const char *sourceHash, int sourceFileCount ) {
++	return version == OPENQ4_SAVEGAME_V2_VERSION && sourceHash != NULL
++		&& savedBuild != OPENQ4_SAVEGAME_SHALLOW_RELEASE_BUILD && savedBuild != OPENQ4_SAVEGAME_IOS_V2_LAYOUT_BUILD
++		&& sourceFileCount == OPENQ4_SAVEGAME_IOS_V2_SOURCE_FILE_COUNT
++		&& idStr::Icmp( sourceHash, OPENQ4_SAVEGAME_IOS_V2_SOURCE_HASH ) == 0;
++}
++
++// The wire ABI a v2 payload was written in: the port's own v2 saves are this
++// build's native raw layout, every other v2 payload the Windows x64 one.
++static inline const char *OpenQ4_SaveGameV2WireABI( int savedBuild, const char *sourceHash, int sourceFileCount, const char *nativeWireABI ) {
++	return OpenQ4_IsSaveGameIosV2Stamp( OPENQ4_SAVEGAME_V2_VERSION, savedBuild, sourceHash, sourceFileCount )
++		? nativeWireABI : OPENQ4_SAVEGAME_V2_WIRE_ABI;
++}
++
+ static inline int OpenQ4_SaveGameLayoutBuild( int version, int savedBuild, const char *sourceHash, int sourceFileCount ) {
+ 	const openQ4SaveGameRelease_t *release = OpenQ4_FindSaveGameRelease( savedBuild, sourceHash, sourceFileCount );
+ 	if ( release != NULL ) {
+ 		return release->build;
+ 	}
++	const openQ4SaveGameRelease_t *iosPin = OpenQ4_FindSaveGameIosPinStamp( savedBuild, sourceHash, sourceFileCount );
++	if ( iosPin != NULL ) {
++		return iosPin->build;
++	}
++	if ( OpenQ4_IsSaveGameIosV2Stamp( version, savedBuild, sourceHash, sourceFileCount ) ) {
++		return OPENQ4_SAVEGAME_IOS_V2_LAYOUT_BUILD;
++	}
+ 	if ( version == OPENQ4_SAVEGAME_V2_VERSION && savedBuild == OPENQ4_SAVEGAME_SHALLOW_RELEASE_BUILD ) {
+ 		return OPENQ4_SAVEGAME_V2_FIRST_RELEASE_BUILD;
+ 	}
